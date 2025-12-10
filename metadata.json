@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Firestore Message Sender 1",
+  "description": "A minimal application to send text messages to a Firebase Firestore collection.",
+  "requestFramePermissions": []
+}
