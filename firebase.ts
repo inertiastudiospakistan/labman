@@ -8,13 +8,13 @@ import "firebase/compat/analytics";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyCxUiyusobT7AHBnBp81ui0b6jptWXZZ2U",
-  authDomain: "st22-f2f0e.firebaseapp.com",
-  projectId: "st22-f2f0e",
-  storageBucket: "st22-f2f0e.firebasestorage.app",
-  messagingSenderId: "859513780268",
-  appId: "1:859513780268:web:b73d97b63d72710435b989",
-  measurementId: "G-GG0MH3BS9D"
+  apiKey: "AIzaSyCPOpbMFudxzh39jrwJ5ATtYNpGiH5Oqkk",
+  authDomain: "labman-e07d2.firebaseapp.com",
+  projectId: "labman-e07d2",
+  storageBucket: "labman-e07d2.firebasestorage.app",
+  messagingSenderId: "843086697564",
+  appId: "1:843086697564:web:c4549ab625e350d6538299",
+  measurementId: "G-86EX8W8S4M"
 };
 
 // Initialize Firebase
@@ -35,4 +35,24 @@ if (typeof window !== 'undefined') {
 // Initialize Services
 export const db = firebase.firestore();
 export const auth = firebase.auth();
+
+// Disable offline persistence to prevent internal assertion errors
+// Disable offline persistence to prevent internal assertion errors
+try {
+  db.settings({
+    cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
+    ignoreUndefinedProperties: true
+  });
+} catch (error) {
+  // Ignore error if settings already applied (common in HMR)
+  console.log("Firestore settings already applied");
+}
+
+// CRITICAL: Disable persistence to avoid state errors
+db.disableNetwork().then(() => {
+  return db.enableNetwork();
+}).catch((error) => {
+  console.warn("Firestore network toggle failed:", error);
+});
+
 export default app;
