@@ -48,11 +48,6 @@ try {
   console.log("Firestore settings already applied");
 }
 
-// CRITICAL: Disable persistence to avoid state errors
-db.disableNetwork().then(() => {
-  return db.enableNetwork();
-}).catch((error) => {
-  console.warn("Firestore network toggle failed:", error);
-});
+// Network toggle removed to ensure stable auth persistence
 
 export default app;

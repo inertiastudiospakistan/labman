@@ -1,7 +1,10 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import firebase from 'firebase/compat/app';
 import { db, auth } from './firebase';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 import { GoogleGenAI } from "@google/genai";
 import {
     LayoutDashboard,
@@ -40,6 +43,7 @@ import {
     Clock,
     Info,
     ArrowRight,
+    ArrowLeft, // Added missing import
     Globe,
     Lock,
     ChevronDown,
@@ -76,16 +80,18 @@ import {
     Landmark,
     TrendingDown,
     PieChart,
-    FileSpreadsheet
+    FileSpreadsheet,
+    ScrollText
 } from 'lucide-react';
 
 // --- Global Helpers ---
 const formatDate = (date: any) => {
     if (!date) return '--';
     try {
-        if (date.toDate) return date.toDate().toLocaleString();
+        if (date?.toDate && typeof date.toDate === 'function') return date.toDate().toLocaleString();
         if (date instanceof Date) return date.toLocaleString();
-        return new Date(date).toLocaleString();
+        const d = new Date(date);
+        return isNaN(d.getTime()) ? '--' : d.toLocaleString();
     } catch (e) { return '--'; }
 };
 
@@ -97,6 +103,26 @@ const formatTimeSafe = (date: any) => {
     } catch (e) { return '--:--'; }
 };
 
+// --- Error Boundary Component ---
+class ErrorBoundary extends React.Component<any, any> {
+    state = { hasError: false }; // Property initializer
+
+    static getDerivedStateFromError(error: any) {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error: any, errorInfo: any) {
+        console.error("Uncaught error:", error, errorInfo);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return <div className="p-8 text-center text-red-500">Something went wrong in this module. Please refresh or contact support.</div>;
+        }
+
+        return this.props.children;
+    }
+}
 const calculateAge = (dobString: string) => {
     if (!dobString) return 0;
     const dob = new Date(dobString);
@@ -160,30 +186,59 @@ const COLORS = {
     CITRON: '#0F172A',            // Primary Text (Dark Slate - high contrast)
     TIFFANY_BLUE: '#334155',      // Secondary Text/Icons (Medium Slate)
 
-    // Semantic Colors (Medical Standard)
-    RUST: '#EF4444',              // Error/Critical (Red)
-    RUFOUS: '#DC2626',            // Error Hover (Dark Red)
-    RUBY_RED: '#B91C1C',          // Critical Alert (Darkest Red)
+    // Semantic Colors (Medical Standard) - High Contrast / Readable
+    RUST: '#B91C1C',              // Error/Critical (Dark Red)
+    RUFOUS: '#991B1B',            // Error Hover (Deep Red)
+    RUBY_RED: '#7F1D1D',          // Critical Alert (Darkest Red)
 
     // Additional Medical Colors
-    SUCCESS: '#10B981',           // Success/Normal (Emerald Green)
-    WARNING: '#F59E0B',           // Warning (Amber)
-    INFO: '#3B82F6',              // Information (Blue)
+    SUCCESS: '#15803d',           // Success/Normal (Dark Green - WCAG compliant)
+    WARNING: '#c2410c',           // Warning (Dark Orange/Amber - WCAG compliant)
+    INFO: '#1d4ed8',              // Information (Dark Blue - WCAG compliant)
 };
 
-const TopBar: React.FC<{ activeTab: string, onNavigate: (tab: string) => void, user: any, onLogout: () => void }> = ({ activeTab, onNavigate, user, onLogout }) => {
+const TopBar: React.FC<{ user: any, onLogout: () => void }> = ({ user, onLogout }) => {
+    const navigate = useNavigate();
+    const location = useLocation();
+
+    // Determine active tab based on current path
+    const getActiveTab = (pathname: string) => {
+        if (pathname === '/' || pathname === '/dashboard') return 'dashboard';
+        // Remove leading slash
+        return pathname.substring(1);
+    };
+
+    const activeTab = getActiveTab(location.pathname);
+
     const navItems = [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'reception', label: 'Reception', icon: ClipboardList },
-        { id: 'phlebotomy', label: 'Phlebotomy', icon: Syringe },
-        { id: 'lab-tech', label: 'Technician', icon: Microscope },
-        { id: 'pathologist', label: 'Pathologist', icon: FileCheck },
+        { id: 'collection', label: 'Phlebotomy', icon: Syringe },
+        { id: 'lab_tech', label: 'Technician', icon: Microscope },
+        { id: 'lab_path', label: 'Pathologist', icon: FileCheck },
+        { id: 'finance', label: 'Finance', icon: DollarSign },
+        { id: 'inventory', label: 'Inventory', icon: Package },
+        // Admin items are handled separately or via dashboard, but we can't fit them all in top bar easily
+        // keeping mostly primary modules
+    ];
+
+    // Filter nav items based on user role roughly (optional, but good for UX)
+    // For now, consistent with previous TopBar, show all?
+    // Previous TopBar showed: dashboard, reception, phlebotomy, lab-tech, pathologist, admin.
+    // Let's stick to the visible ones from the original list + Admin if role is admin.
+
+    const visibleNavItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'reception', label: 'Reception', icon: ClipboardList },
+        { id: 'collection', label: 'Phlebotomy', icon: Syringe },
+        { id: 'lab_tech', label: 'Technician', icon: Microscope },
+        { id: 'lab_path', label: 'Pathologist', icon: FileCheck },
         { id: 'admin', label: 'Admin', icon: Settings },
     ];
 
     return (
         <div className="w-full h-16 flex items-center justify-between px-6 shadow-md z-50 shrink-0" style={{ backgroundColor: COLORS.RICH_BLACK, borderBottom: `1px solid ${COLORS.MIDNIGHT_GREEN}` }}>
-            <div className="flex items-center gap-3 cursor-pointer" onClick={() => onNavigate('dashboard')}>
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/dashboard')}>
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg transform transition-transform hover:scale-105" style={{ backgroundColor: COLORS.PERSIAN_GREEN }}>
                     <Activity className="w-6 h-6 text-white" />
                 </div>
@@ -194,12 +249,12 @@ const TopBar: React.FC<{ activeTab: string, onNavigate: (tab: string) => void, u
             </div>
 
             <div className="flex items-center gap-2 p-1.5 rounded-full border backdrop-blur-sm" style={{ backgroundColor: `${COLORS.MIDNIGHT_GREEN}`, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
-                {navItems.map(item => {
-                    const isActive = activeTab === item.id;
+                {visibleNavItems.map(item => {
+                    const isActive = activeTab === item.id || (item.id === 'admin' && activeTab.startsWith('admin_'));
                     return (
                         <button
                             key={item.id}
-                            onClick={() => onNavigate(item.id)}
+                            onClick={() => navigate(`/${item.id === 'dashboard' ? '' : item.id}`)} // Redirect to specific route
                             className={`px-4 py-2 rounded-full flex items-center gap-2 text-sm font-bold transition-all duration-300 ${isActive ? 'shadow-md transform scale-105' : ''}`}
                             style={{
                                 backgroundColor: isActive ? COLORS.PERSIAN_GREEN : 'transparent',
@@ -252,10 +307,10 @@ const ToastContainer: React.FC<{ toasts: ToastMessage[], onClose: (id: string) =
                     info: <Info className="w-5 h-5" />
                 };
                 const colors = {
-                    success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
-                    error: 'bg-red-50 border-red-200 text-red-800',
-                    warning: 'bg-amber-50 border-amber-200 text-amber-800',
-                    info: 'bg-sky-50 border-sky-200 text-sky-800'
+                    success: 'bg-green-100 border-green-300 text-green-900',
+                    error: 'bg-red-100 border-red-300 text-red-900',
+                    warning: 'bg-amber-100 border-amber-300 text-amber-900',
+                    info: 'bg-blue-100 border-blue-300 text-blue-900'
                 };
                 return (
                     <div key={toast.id} className={`${colors[toast.type]} border rounded-lg shadow-lg p-4 min-w-[300px] max-w-md animate-in slide-in-from-right-5 flex items-start gap-3`}>
@@ -848,30 +903,34 @@ const downloadCSV = (data: any[], filename: string) => {
 
 // --- Visual Components ---
 
-const SimpleBarChart: React.FC<{ data: { label: string, value: number }[], color?: string }> = ({ data, color = "bg-indigo-500" }) => {
-    const max = Math.max(...data.map(d => d.value)) || 1;
-    const containerHeight = 160; // Fixed height in pixels
+const SimpleBarChart: React.FC<{ data: { label: string, value: number, color?: string }[], color?: string }> = ({ data, color = "bg-indigo-500" }) => {
+    const max = Math.max(...data.map(d => Math.abs(d.value))) || 1;
+    const containerHeight = 160;
 
     return (
-        <div className="flex items-end gap-3 w-full" style={{ height: `${containerHeight}px` }}>
+        <div className="flex items-end gap-2 w-full pt-6" style={{ height: `${containerHeight + 40}px` }}>
             {data.map((d, i) => {
-                const heightPx = Math.max((d.value / max) * containerHeight, 4);
+                const heightPx = Math.max((Math.abs(d.value) / max) * containerHeight, 4);
+                const barColor = d.color || (d.value < 0 ? 'bg-red-500' : color);
+
                 return (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-2 group relative">
+                    <div key={i} className="flex-1 flex flex-col items-center gap-2 group relative min-w-[40px]">
                         <div className="relative w-full flex justify-center items-end flex-1" style={{ minHeight: `${containerHeight}px` }}>
                             <div
                                 style={{ height: `${heightPx}px` }}
-                                className={`w-full max-w-[50px] ${color} opacity-80 group-hover:opacity-100 transition-all rounded-t relative`}
+                                className={`w-full max-w-[40px] ${barColor} opacity-90 group-hover:opacity-100 transition-all rounded-t relative shadow-sm`}
                             >
-                                {/* Tooltip on hover */}
-                                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 bg-slate-800 text-white text-[10px] px-2 py-1 rounded pointer-events-none whitespace-nowrap z-10 transition-opacity">
+                                {/* Tooltip */}
+                                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 bg-slate-900 text-white text-[10px] px-2 py-1 rounded pointer-events-none whitespace-nowrap z-20 shadow-lg transition-opacity font-bold">
                                     ${d.value.toLocaleString()}
                                 </div>
                             </div>
                         </div>
-                        <div className="text-center">
-                            <span className="text-[10px] text-slate-400 block">{d.label}</span>
-                            <span className="text-xs font-bold text-slate-700 block mt-0.5">${(d.value / 1000).toFixed(1)}k</span>
+                        <div className="text-center w-full overflow-hidden">
+                            <span className="text-[10px] text-slate-500 block truncate px-1" title={d.label}>{d.label}</span>
+                            <span className={`text-[10px] font-bold block mt-0.5 ${d.value < 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                                {Math.abs(d.value) >= 1000 ? '$' + (d.value / 1000).toFixed(1) + 'k' : '$' + d.value}
+                            </span>
                         </div>
                     </div>
                 );
@@ -1053,78 +1112,6 @@ const InventoryRequestModal: React.FC<{
     );
 }
 
-const PrintInvoiceModal: React.FC<{ data: PrintableInvoiceData; onClose: () => void }> = ({ data, onClose }) => {
-    useEffect(() => { const timer = setTimeout(() => { window.print(); }, 800); return () => clearTimeout(timer); }, []);
-    const handlePrint = () => { window.print(); };
-    return (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 print:p-0 print:bg-white print:fixed print:inset-0 print:z-[9999]">
-            <style>{`@media print { body > *:not(.print-modal-root) { display: none !important; } .print-modal-root { display: flex !important; width: 100% !important; height: 100% !important; } }`}</style>
-            <div className="print-modal-root bg-white w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden print:shadow-none print:w-full print:max-w-none print:rounded-none print:h-full print:absolute print:top-0 print:left-0">
-                <div className="bg-slate-800 text-white p-4 flex justify-between items-center print:hidden">
-                    <h3 className="font-bold flex items-center gap-2"><Printer className="w-5 h-5" /> Print Preview</h3>
-                    <div className="flex gap-2">
-                        <button onClick={handlePrint} className="bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-all">Print Now</button>
-                        <button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-all">Close</button>
-                    </div>
-                </div>
-                <div className="p-10 print:p-8 text-slate-900 font-serif h-full flex flex-col overflow-y-auto">
-                    <div className="border-b-2 border-slate-800 pb-6 mb-6 flex justify-between items-start">
-                        <div><h1 className="text-3xl font-bold text-slate-900 tracking-tight">LabPro Diagnostics</h1><p className="text-sm text-slate-600 mt-2 leading-relaxed">123 Medical Plaza, Suite 400<br />New York, NY 10001<br />Phone: +1 (555) 123-4567</p></div>
-                        <div className="text-right"><h2 className="text-xl font-bold uppercase tracking-widest text-slate-400">Invoice</h2><p className="font-mono font-bold text-xl mt-1 text-slate-900">#{data.invoiceId.slice(0, 8).toUpperCase()}</p><p className="text-sm text-slate-500 mt-1">{data.date}</p></div>
-                    </div>
-                    <div className="flex justify-between mb-8 bg-slate-50 p-5 rounded-lg border border-slate-100 print:bg-transparent print:p-0 print:border-0">
-                        <div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Patient Details</p><p className="font-bold text-lg text-slate-800">{data.patientName}</p><p className="text-sm text-slate-700">{data.age} / {data.gender}</p><p className="text-sm text-slate-700">{data.patientPhone}</p></div>
-                        <div className="text-right"><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Referred By</p><p className="font-bold text-slate-800">{data.doctor}</p><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-4 mb-1">Payment Mode</p><p className="uppercase font-bold text-slate-800">{data.paymentMethod}</p></div>
-                    </div>
-                    <div className="flex-1"><table className="w-full text-left mb-8"><thead className="border-b-2 border-slate-200"><tr><th className="py-2 text-sm font-bold uppercase text-slate-500">Test Description</th><th className="py-2 text-right text-sm font-bold uppercase text-slate-500">Amount</th></tr></thead><tbody className="divide-y divide-slate-100">{data.items.map((item, idx) => (<tr key={idx}><td className="py-3"><p className="font-bold text-slate-800">{item.name}</p><p className="text-xs text-slate-500">{item.code}</p></td><td className="py-3 text-right font-mono font-medium text-slate-700">${item.price.toFixed(2)}</td></tr>))}</tbody></table></div>
-                    <div className="flex justify-end border-t border-slate-200 pt-6"><div className="w-56 space-y-2"><div className="flex justify-between text-sm"><span className="text-slate-500 font-medium">Subtotal:</span><span className="font-mono font-bold text-slate-700">${data.subtotal.toFixed(2)}</span></div>{data.discount > 0 && (<div className="flex justify-between text-sm"><span className="text-slate-500 font-medium">Discount:</span><span className="font-mono font-bold text-red-500">-${data.discount.toFixed(2)}</span></div>)}<div className="flex justify-between text-xl font-bold border-t border-slate-800 pt-3 mt-2 text-slate-900"><span>Total:</span><span>${data.total.toFixed(2)}</span></div><div className="flex justify-between text-sm mt-4 pt-4 border-t border-slate-200"><span className="text-slate-500 font-medium">Amount Paid:</span><span className="font-mono font-bold text-slate-700">${data.paid.toFixed(2)}</span></div>{data.due > 0 && (<div className="flex justify-between text-sm text-red-600 bg-red-50 p-2 rounded mt-2 print:bg-transparent print:p-0 print:text-red-600"><span className="font-bold">Balance Due:</span><span className="font-mono font-bold">${data.due.toFixed(2)}</span></div>)}</div></div>
-                    <div className="mt-12 pt-8 border-t border-slate-200 text-center text-xs text-slate-400"><p>Thank you for choosing LabPro Diagnostics.</p><p>This is a computer generated invoice and does not require a signature.</p><p className="mt-2 font-mono">{data.invoiceId}</p></div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const PrintReportModal: React.FC<{ data: Sample; onClose: () => void }> = ({ data, onClose }) => {
-    useEffect(() => { const timer = setTimeout(() => window.print(), 800); return () => clearTimeout(timer); }, []);
-    return (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 print:p-0 print:bg-white print:fixed print:inset-0 print:z-[9999]">
-            <style>{`@media print { body > *:not(.print-report-root) { display: none !important; } .print-report-root { display: flex !important; width: 100% !important; height: 100% !important; position: absolute; top: 0; left: 0; } @page { margin: 0; size: A4; } }`}</style>
-            <div className="print-report-root bg-white w-full max-w-3xl rounded-xl shadow-2xl overflow-hidden flex flex-col h-[90vh] print:h-full print:rounded-none print:shadow-none">
-                <div className="bg-slate-800 text-white p-4 flex justify-between items-center print:hidden shrink-0"><h3 className="font-bold flex items-center gap-2"><FileText className="w-5 h-5" /> Report Preview</h3><div className="flex gap-2"><button onClick={() => window.print()} className="bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded-lg font-bold text-sm">Print</button><button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg font-bold text-sm">Close</button></div></div>
-                <div className="flex-1 overflow-y-auto p-10 print:p-8 font-serif bg-white text-slate-900">
-                    <div className="border-b-2 border-slate-900 pb-6 mb-8 flex justify-between items-end"><div><h1 className="text-3xl font-bold tracking-tight text-slate-900">LabPro Diagnostics</h1><p className="text-sm text-slate-600 mt-1">123 Medical Plaza, New York, NY 10001</p><p className="text-sm text-slate-600">ISO 15189 Certified Laboratory</p></div><div className="text-right"><h2 className="text-xl font-bold uppercase tracking-widest text-slate-400">Lab Report</h2><p className="font-mono font-bold text-lg mt-1">{data.sampleLabelId || data.id.slice(0, 8).toUpperCase()}</p><p className="text-sm text-slate-500">{formatDate(data.reportedAt || new Date())}</p></div></div>
-                    <div className="grid grid-cols-2 gap-8 mb-8 bg-slate-50 p-6 rounded-lg border border-slate-100 print:bg-transparent print:p-0 print:border-0"><div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Patient Name</p><p className="font-bold text-lg">{data.patientName}</p></div><div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Age / Gender</p><p className="font-bold text-lg">{data.patientAge || '--'} Yrs / {data.patientGender || '--'}</p></div><div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Referred By</p><p className="font-bold text-lg">Dr. Smith (General)</p></div><div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Sample Type</p><p className="font-bold text-lg">{data.sampleType}</p></div></div>
-                    <div className="mb-6 text-center"><h2 className="text-xl font-bold underline decoration-2 underline-offset-4 text-slate-900">{data.testName}</h2></div>
-                    <table className="w-full text-left mb-8"><thead className="border-b-2 border-slate-200"><tr><th className="py-2 font-bold uppercase text-xs text-slate-500 w-1/2">Investigation</th><th className="py-2 font-bold uppercase text-xs text-slate-500 w-1/4">Result</th><th className="py-2 font-bold uppercase text-xs text-slate-500 w-1/4 text-right">Reference Range</th></tr></thead><tbody className="divide-y divide-slate-100">{data.results && Object.entries(data.results).map(([key, val]: [string, any]) => {
-                        // Handle both old string format (migration support) and new object format
-                        const value = typeof val === 'object' ? val.value : val;
-                        const unit = typeof val === 'object' ? val.unit : '';
-                        const flag = typeof val === 'object' ? val.flag : 'N';
-                        const flagLabel = { 'N': '', 'L': '(Low)', 'H': '(High)', 'CL': '(CRITICAL LOW)', 'CH': '(CRITICAL HIGH)' }[flag as string] || '';
-                        const isCritical = flag === 'CL' || flag === 'CH';
-                        const isAbnormal = flag === 'L' || flag === 'H';
-
-                        return (
-                            <tr key={key}>
-                                <td className="py-3 font-medium text-slate-800">{key}</td>
-                                <td className="py-3">
-                                    <span className={`font-bold ${isCritical ? 'text-red-600' : isAbnormal ? 'text-amber-700' : 'text-slate-900'}`}>{value}</span>
-                                    <span className="text-slate-500 text-xs ml-1">{unit}</span>
-                                    {flagLabel && <span className={`text-[10px] ml-2 font-bold ${isCritical ? 'text-red-600' : 'text-amber-600'}`}>{flagLabel}</span>}
-                                </td>
-                                <td className="py-3 text-right text-slate-500 text-sm">--</td>
-                            </tr>
-                        );
-                    })}{(!data.results || Object.keys(data.results).length === 0) && (<tr><td colSpan={3} className="py-4 text-center text-slate-400 italic">No quantitative results recorded.</td></tr>)}</tbody></table>
-                    {(data.conclusion || data.pathologistRemarks) && (<div className="mb-12 border rounded-lg p-4 bg-slate-50 print:bg-transparent print:border-slate-300">{data.conclusion && (<div className="mb-4"><h4 className="font-bold text-sm uppercase text-slate-700 mb-1">Pathologist's Conclusion</h4><p className="text-slate-900 text-sm leading-relaxed">{data.conclusion}</p></div>)}{data.pathologistRemarks && (<div><h4 className="font-bold text-sm uppercase text-slate-700 mb-1">Remarks</h4><p className="text-slate-900 text-sm leading-relaxed">{data.pathologistRemarks}</p></div>)}</div>)}
-                    <div className="mt-auto pt-6 flex justify-end"><div className="text-center w-48"><div className="h-16 mb-2 border-b border-slate-900/20"><div className="h-full flex items-end justify-center pb-2 font-cursive text-2xl text-slate-600">Dr. A. Pathologist</div></div><p className="font-bold text-sm text-slate-900">{data.verifiedBy || "Dr. Alice Pathologist"}</p><p className="text-xs text-slate-500">MD, Pathology (Reg: 12345)</p></div></div>
-                    <div className="mt-8 pt-4 border-t border-slate-200 text-center text-[10px] text-slate-400"><p>End of Report. Electronically generated by LabPro System.</p></div>
-                </div>
-            </div>
-        </div>
-    );
-};
 
 //  1. Unified Landing Page (Login)
 const LandingPage: React.FC<{ onLoginSuccess: (role: Role, user: any) => void }> = ({ onLoginSuccess }) => {
@@ -1135,15 +1122,19 @@ const LandingPage: React.FC<{ onLoginSuccess: (role: Role, user: any) => void }>
     const [selectedRole, setSelectedRole] = useState<Role>('receptionist');
 
     // Set Firebase Auth persistence to local
-    useEffect(() => {
-        auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(console.error);
-    }, []);
+    // Moved inside handleLogin to ensure sequential execution
+    // useEffect(() => {
+    //    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(console.error);
+    // }, []);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!username || !password) { setError("Please enter username and password."); return; }
         setLoading(true); setError('');
         try {
+            // CRITICAL: Ensure persistence is LOCAL before signing in
+            await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
             // Hardcoded admin login - always works
             if (username === 'admin' && password === 'admin') {
                 try {
@@ -1557,7 +1548,7 @@ const FinanceDoctorsPanel: React.FC<{ doctors: Doctor[], orders: Order[] }> = ({
     )
 };
 
-const FinanceModule: React.FC = () => {
+const FinanceModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
     const { showToast } = useDialog();
     const [subView, setSubView] = useState<'dashboard' | 'sales' | 'expenses' | 'profit' | 'doctors' | 'payroll' | 'inventory'>('dashboard');
     const [orders, setOrders] = useState<Order[]>([]);
@@ -1609,10 +1600,21 @@ const FinanceModule: React.FC = () => {
         return { revenue, paidExpenses: paidExp, invUsageCost, pendingCommissions, profit };
     }, [filteredOrders, filteredPaidExpenses, filteredInvTx, orders]);
 
+    const handleModuleBack = () => {
+        if (subView !== 'dashboard') {
+            setSubView('dashboard');
+        } else if (onBack) {
+            onBack();
+        }
+    };
+
     return (
         <div className="h-full flex flex-col bg-slate-50">
             <div className="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center shrink-0">
-                <div className="flex items-center gap-2"><h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><DollarSign className="w-6 h-6 text-indigo-600" /> Financial Dashboard</h2></div>
+                <div className="flex items-center gap-2">
+                    {onBack && <button onClick={handleModuleBack} className="p-2 rounded-full hover:bg-slate-100 transition-colors"><ArrowLeft className="w-5 h-5 text-indigo-600" /></button>}
+                    <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><DollarSign className="w-6 h-6 text-indigo-600" /> Financial Dashboard</h2>
+                </div>
                 <div className="flex bg-slate-100 p-1 rounded-lg">
                     {[{ id: 'dashboard', label: 'Overview', icon: LayoutDashboard }, { id: 'sales', label: 'Sales', icon: FileText }, { id: 'expenses', label: 'Expenses', icon: Wallet }, { id: 'doctors', label: 'Referrals', icon: UserPlus }, { id: 'inventory', label: 'Inventory Finance', icon: Package }].map(tab => (
                         <button key={tab.id} onClick={() => setSubView(tab.id as any)} className={`px-3 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 transition-all ${subView === tab.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}><tab.icon className="w-4 h-4" /> <span className="hidden sm:inline">{tab.label}</span></button>
@@ -1644,7 +1646,7 @@ const FinanceModule: React.FC = () => {
                                 <p className="text-3xl font-bold text-slate-800 mt-2">${kpi.invUsageCost.toLocaleString()}</p>
                                 <p className="text-xs text-amber-600 mt-1 font-bold">Cost of Goods Sold</p>
                             </div>
-                            <div className={`p-6 rounded-xl border shadow-lg text-white ${kpi.profit >= 0 ? 'bg-indigo-600 border-indigo-700 shadow-indigo-200' : 'bg-red-600 border-red-700 shadow-red-200'}`}>
+                            <div className={`p-6 rounded-xl border shadow-lg text-white ${kpi.profit >= 0 ? 'bg-green-600 border-green-700 shadow-green-200' : 'bg-red-600 border-red-700 shadow-red-200'}`}>
                                 <p className="text-white/80 text-xs font-bold uppercase">Net Profit</p>
                                 <p className="text-3xl font-bold mt-2">${kpi.profit.toLocaleString()}</p>
                                 <p className="text-xs text-white/70 mt-1 opacity-80">Rev - (Exp + Inv. Usage)</p>
@@ -1652,18 +1654,21 @@ const FinanceModule: React.FC = () => {
                         </div>
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                                 <h3 className="font-bold text-slate-800 mb-4">Financial Overview</h3>
                                 {[kpi.revenue, kpi.paidExpenses, kpi.invUsageCost].some(v => v > 0) ? (
                                     <>
                                         <SimpleBarChart data={[
-                                            { label: 'Revenue', value: kpi.revenue },
-                                            { label: 'Paid Exp', value: kpi.paidExpenses },
-                                            { label: 'Inv. Usage', value: kpi.invUsageCost },
-                                            { label: 'Profit', value: Math.max(0, kpi.profit) }
+                                            { label: 'Revenue', value: kpi.revenue, color: 'bg-green-500' },
+                                            { label: 'Paid Exp', value: kpi.paidExpenses, color: 'bg-red-500' },
+                                            { label: 'Inv. Usage', value: kpi.invUsageCost, color: 'bg-orange-500' },
+                                            { label: 'Profit', value: kpi.profit, color: kpi.profit >= 0 ? 'bg-green-600' : 'bg-red-600' }
                                         ]} />
                                         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                                            <div className="flex items-center gap-2"><div className="w-3 h-3 bg-indigo-500 rounded"></div><span className="text-slate-600">Data Values</span></div>
+                                            <div className="flex items-center gap-2"><div className="w-3 h-3 bg-green-500 rounded"></div><span className="text-slate-600">Revenue</span></div>
+                                            <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 rounded"></div><span className="text-slate-600">Expenses</span></div>
+                                            <div className="flex items-center gap-2"><div className="w-3 h-3 bg-orange-500 rounded"></div><span className="text-slate-600">Inventory</span></div>
+                                            <div className="flex items-center gap-2"><div className={`w-3 h-3 rounded ${kpi.profit >= 0 ? 'bg-green-600' : 'bg-red-600'}`}></div><span className="text-slate-600">Net Profit</span></div>
                                         </div>
                                     </>
                                 ) : (
@@ -1881,36 +1886,279 @@ const FinanceModule: React.FC = () => {
 
 // ... (Rest of App: Sidebar, etc.)
 
-const OrderHistoryTable: React.FC = () => {
+const OrderHistoryTable: React.FC<{ onViewDetails?: (patientId: string) => void; onPrintReport?: (orderId: string) => void }> = ({ onViewDetails, onPrintReport }) => {
     const [orders, setOrders] = useState<Order[]>([]);
     useEffect(() => { const unsub = db.collection('orders').orderBy('createdAt', 'desc').limit(50).onSnapshot(snap => setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() } as Order)))); return () => unsub(); }, []);
+    const showAction = onViewDetails || onPrintReport;
     return (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b"><tr><th className="p-4">Date</th><th className="p-4">Order ID</th><th className="p-4">Patient</th><th className="p-4">Amount</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y divide-slate-50">{orders.map(o => (<tr key={o.id} className="hover:bg-slate-50"><td className="p-4 text-xs text-slate-500">{formatDate(o.createdAt)}</td><td className="p-4 font-mono text-xs font-bold">{o.id.slice(0, 8).toUpperCase()}</td><td className="p-4 font-bold text-slate-800">{o.patientName}</td><td className="p-4 font-bold text-slate-800">${o.totalAmount}</td><td className="p-4"><span className={`px-2 py-1 rounded text-xs font-bold uppercase ${o.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{o.status}</span></td></tr>))}{orders.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No recent orders found.</td></tr>}</tbody></table>
+            <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b">
+                    <tr>
+                        <th className="p-4">Date</th>
+                        <th className="p-4">Order ID</th>
+                        <th className="p-4">Patient</th>
+                        <th className="p-4">Amount</th>
+                        <th className="p-4">Status</th>
+                        {showAction && <th className="p-4 text-right">Action</th>}
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                    {orders.map(o => (
+                        <tr key={o.id} className="hover:bg-slate-50">
+                            <td className="p-4 text-xs text-slate-500">{formatDate(o.createdAt)}</td>
+                            <td className="p-4 font-mono text-xs font-bold">{o.id.slice(0, 8).toUpperCase()}</td>
+                            <td className="p-4 font-bold text-slate-800">{o.patientName}</td>
+                            <td className="p-4 font-bold text-slate-800">${o.totalAmount}</td>
+                            <td className="p-4">
+                                <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${o.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{o.status}</span>
+                            </td>
+                            {showAction && (
+                                <td className="p-4 text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                        {onPrintReport && (
+                                            <button onClick={() => onPrintReport(o.id)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded border border-indigo-200" title="Reprint Report">
+                                                <Printer className="w-4 h-4" />
+                                            </button>
+                                        )}
+                                        {onViewDetails && (
+                                            <button onClick={() => onViewDetails(o.patientId)} className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded text-xs font-bold hover:bg-slate-50 flex items-center gap-1">
+                                                <History className="w-3 h-3" /> Details
+                                            </button>
+                                        )}
+                                    </div>
+                                </td>
+                            )}
+                        </tr>
+                    ))}
+                    {orders.length === 0 && <tr><td colSpan={showAction ? 6 : 5} className="p-8 text-center text-slate-400">No recent orders found.</td></tr>}
+                </tbody>
+            </table>
         </div>
     );
 };
 
-const ReceptionReportsTable: React.FC<{ onPrint: (s: Sample) => void }> = ({ onPrint }) => {
+const ReceptionReportsTable: React.FC<{ onPrint: (s: Sample[]) => void }> = ({ onPrint }) => {
     const [samples, setSamples] = useState<Sample[]>([]);
-    useEffect(() => { const unsub = db.collection('samples').where('status', '==', 'reported').orderBy('reportedAt', 'desc').limit(50).onSnapshot(snap => setSamples(snap.docs.map(d => ({ id: d.id, ...d.data() } as Sample)))); return () => unsub(); }, []);
+
+    useEffect(() => {
+        const unsub = db.collection('samples')
+            .where('status', '==', 'reported')
+            .orderBy('reportedAt', 'desc')
+            .limit(50)
+            .onSnapshot(snap => setSamples(snap.docs.map(d => ({ id: d.id, ...d.data() } as Sample))));
+        return () => unsub();
+    }, []);
+
+    // Group by Order ID
+    const groupedSamples = useMemo(() => {
+        const groups: Record<string, Sample[]> = {};
+        samples.forEach(s => {
+            const key = s.orderId || s.patientId; // Fallback to patient if no orderId
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(s);
+        });
+        return Object.values(groups).sort((a, b) => {
+            const dateA = a[0]?.reportedAt?.toDate ? a[0].reportedAt.toDate() : new Date();
+            const dateB = b[0]?.reportedAt?.toDate ? b[0].reportedAt.toDate() : new Date();
+            return dateB.getTime() - dateA.getTime();
+        });
+    }, [samples]);
+
     return (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b"><tr><th className="p-4">Reported Date</th><th className="p-4">Patient</th><th className="p-4">Test</th><th className="p-4 text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-50">{samples.map(s => (<tr key={s.id} className="hover:bg-slate-50"><td className="p-4 text-xs text-slate-500">{formatDate(s.reportedAt)}</td><td className="p-4 font-bold text-slate-800">{s.patientName}</td><td className="p-4 text-slate-600">{s.testName}</td><td className="p-4 text-right"><button onClick={() => onPrint(s)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded text-xs font-bold hover:bg-indigo-100 flex items-center gap-1 ml-auto transition-colors"><Printer className="w-3 h-3" /> Print Report</button></td></tr>))}{samples.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400">No completed reports yet.</td></tr>}</tbody></table>
+            <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b">
+                    <tr>
+                        <th className="p-4">Reported Date</th>
+                        <th className="p-4">Patient</th>
+                        <th className="p-4">Tests Included</th>
+                        <th className="p-4 text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                    {groupedSamples.map((group, idx) => {
+                        const s = group[0];
+                        const testNames = group.map(g => g.testName).join(', ');
+                        return (
+                            <tr key={idx} className="hover:bg-slate-50">
+                                <td className="p-4 text-xs text-slate-500">{formatDate(s.reportedAt)}</td>
+                                <td className="p-4 font-bold text-slate-800">
+                                    {s.patientName}
+                                    <div className="text-xs font-normal text-slate-500">{s.patientAge} Y / {s.patientGender}</div>
+                                </td>
+                                <td className="p-4 text-slate-600">
+                                    <span className="font-medium text-slate-900">{group.length} Test(s):</span> {testNames}
+                                </td>
+                                <td className="p-4 text-right">
+                                    <button onClick={() => onPrint(group)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded text-xs font-bold hover:bg-indigo-100 flex items-center gap-1 ml-auto transition-colors">
+                                        <Printer className="w-3 h-3" /> Print Report
+                                    </button>
+                                </td>
+                            </tr>
+                        );
+                    })}
+                    {groupedSamples.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400">No completed reports yet.</td></tr>}
+                </tbody>
+            </table>
         </div>
     );
 };
 
-const PatientSearchPanel: React.FC<{ onSelect: (p: Patient) => void }> = ({ onSelect }) => {
+const PatientSearchPanel: React.FC<{ onSelect: (p: Patient) => void, onViewDetails?: (p: Patient) => void }> = ({ onSelect, onViewDetails }) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<Patient[]>([]);
     const [loading, setLoading] = useState(false);
-    const handleSearch = async () => { if (!query) return; setLoading(true); try { const snap = await db.collection('patients').where('fullName', '>=', query).where('fullName', '<=', query + '\uf8ff').limit(20).get(); setResults(snap.docs.map(d => ({ id: d.id, ...d.data() } as Patient))); } catch (e) { console.error(e); } setLoading(false); };
+
+    const handleSearch = async () => {
+        if (!query) return;
+        setLoading(true);
+        try {
+            // Using >= and <= query for prefix match
+            const snap = await db.collection('patients')
+                .where('fullName', '>=', query)
+                .where('fullName', '<=', query + '\uf8ff')
+                .limit(20)
+                .get();
+            setResults(snap.docs.map(d => ({ id: d.id, ...d.data() } as Patient)));
+        } catch (e) { console.error(e); }
+        setLoading(false);
+    };
+
     return (
         <div className="p-6 h-full flex flex-col bg-white rounded-xl border border-slate-200 shadow-sm">
             <h3 className="text-lg font-bold text-slate-800 mb-4">Search Patient Database</h3>
-            <div className="flex gap-2 mb-6"><div className="relative flex-1"><Search className="absolute left-3 top-3 text-slate-400 w-4 h-4" /><input className="w-full pl-9 p-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Enter Patient Name..." value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} /></div><button onClick={handleSearch} disabled={loading} className="px-6 bg-indigo-600 text-white rounded-lg font-bold shadow hover:bg-indigo-700 disabled:opacity-50">{loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Search'}</button></div>
-            <div className="flex-1 overflow-y-auto">{results.map(p => (<div key={p.id} className="p-4 border-b border-slate-100 last:border-0 hover:bg-slate-50 flex justify-between items-center transition-colors"><div><p className="font-bold text-slate-800">{p.fullName}</p><p className="text-xs text-slate-500">{p.phone} • {p.gender} • {calculateAge(p.dob)} yrs</p></div><button onClick={() => onSelect(p)} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded text-xs font-bold hover:bg-indigo-100">Select</button></div>))}{results.length === 0 && !loading && <div className="p-12 text-center text-slate-400 flex flex-col items-center"><Search className="w-8 h-8 mb-2 opacity-20" /><p>No patients found. Search by name.</p></div>}</div>
+            <div className="flex gap-2 mb-6">
+                <div className="relative flex-1">
+                    <Search className="absolute left-3 top-3 text-slate-400 w-4 h-4" />
+                    <input
+                        className="w-full pl-9 p-3 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="Enter Patient Name..."
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                    />
+                </div>
+                <button onClick={handleSearch} disabled={loading} className="px-6 bg-indigo-600 text-white rounded-lg font-bold shadow hover:bg-indigo-700 disabled:opacity-50">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Search'}
+                </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+                {results.map(p => (
+                    <div key={p.id} className="p-4 border-b border-slate-100 last:border-0 hover:bg-slate-50 flex justify-between items-center transition-colors">
+                        <div>
+                            <p className="font-bold text-slate-800">{p.fullName}</p>
+                            <p className="text-xs text-slate-500">{p.phone} • {p.gender} • {calculateAge(p.dob)} yrs</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => onSelect(p)} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded text-xs font-bold hover:bg-indigo-100">Select</button>
+                            {onViewDetails && (
+                                <button onClick={() => onViewDetails(p)} className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded text-xs font-bold hover:bg-slate-50 flex items-center gap-1">
+                                    <History className="w-3 h-3" /> Details
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                ))}
+                {results.length === 0 && !loading && (
+                    <div className="p-12 text-center text-slate-400 flex flex-col items-center">
+                        <Search className="w-8 h-8 mb-2 opacity-20" />
+                        <p>No patients found. Search by name.</p>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const PatientDetailsModal: React.FC<{ patient: Patient; onClose: () => void }> = ({ patient, onClose }) => {
+    const [history, setHistory] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        db.collection('orders').where('patientId', '==', patient.id).limit(20).get().then(snap => {
+            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            docs.sort((a: any, b: any) => {
+                const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime();
+                const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime();
+                return tB - tA;
+            });
+            setHistory(docs);
+            setLoading(false);
+        });
+    }, [patient]);
+
+    return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl h-[80vh] flex flex-col">
+                <div className="p-6 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-800">Patient Details: {patient.fullName}</h2>
+                        <p className="text-sm text-slate-500">{patient.phone} • {patient.gender} • {calculateAge(patient.dob)} yrs</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full"><XCircle className="w-6 h-6 text-slate-500" /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                    <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><History className="w-5 h-5 text-indigo-500" /> Recent Visits & Tests</h3>
+                    {loading ? <p className="text-center p-10 text-slate-400">Loading history...</p> : (
+                        <div className="space-y-4">
+                            {history.length > 0 ? history.map(h => (
+                                <div key={h.id} className="border rounded-lg p-4 hover:shadow-sm transition-all">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div>
+                                            <p className="font-bold text-indigo-900">Visit: {formatDate(h.createdAt)} <span className="text-slate-400 text-xs font-normal">at {formatTimeSafe(h.createdAt)}</span></p>
+                                            <p className="text-xs text-slate-500 font-mono">Order ID: {h.id}</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="font-bold text-slate-800">${h.totalAmount}</p>
+                                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${h.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{h.status}</span>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-50 p-3 rounded text-sm text-slate-700 border border-slate-100">
+                                        <p className="font-bold text-xs text-slate-500 uppercase mb-1">Tests Included:</p>
+                                        {/* Since Order doc doesn't strictly have test names list, we query samples or rely on testCount? 
+                                            Ideally we'd want test names. We can query samples. But for speed, we'll try to use a report print fallback or just list 'X Tests'. 
+                                            Actually, to 'what test they took', we need the test names. 
+                                            We'll add a 'Load Details' button or just query samples for this order. 
+                                            Let's query samples on demand or just add a Print Report button that creates a report view. */}
+                                        <TestListLoader orderId={h.id} />
+                                    </div>
+                                </div>
+                            )) : <p className="text-center text-slate-400 italic">No history found.</p>}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const TestListLoader: React.FC<{ orderId: string }> = ({ orderId }) => {
+    const [tests, setTests] = useState<any[]>([]);
+    const [loaded, setLoaded] = useState(false);
+    useEffect(() => {
+        db.collection('samples').where('orderId', '==', orderId).get().then(s => {
+            setTests(s.docs.map(d => d.data()));
+            setLoaded(true);
+        });
+    }, [orderId]);
+
+    // Helper to print this specific order logic
+    // We recycle PrintReportModal logic? But PrintReportModal needs 'data' in specific format.
+    // We can construct it.
+    const [showPrint, setShowPrint] = useState(false);
+
+    if (!loaded) return <span className="text-xs text-slate-400 animate-pulse">Loading tests...</span>;
+
+    return (
+        <div className="flex justify-between items-center">
+            <span className="font-medium">{tests.map(t => t.testName).join(', ')}</span>
+            {tests.some(t => t.status === 'reported') && (
+                <button onClick={() => setShowPrint(true)} className="text-xs bg-white border border-indigo-200 text-indigo-600 px-3 py-1 rounded font-bold hover:bg-indigo-50 flex items-center gap-1 shadow-sm">
+                    <Printer className="w-3 h-3" /> Print Report
+                </button>
+            )}
+            {showPrint && <PrintReportModal data={tests.filter(t => t.status === 'reported')} onClose={() => setShowPrint(false)} />}
         </div>
     );
 };
@@ -1921,15 +2169,19 @@ const DashboardModule: React.FC<{ role: Role }> = ({ role }) => {
     );
 };
 
-const PatientsModule: React.FC = () => {
+const PatientsModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
     const [patients, setPatients] = useState<Patient[]>([]);
     useEffect(() => { const unsub = db.collection('patients').orderBy('createdAt', 'desc').limit(50).onSnapshot(s => setPatients(s.docs.map(d => ({ id: d.id, ...d.data() } as Patient)))); return () => unsub(); }, []);
-    return (<div className="h-full flex flex-col"><h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Users className="w-6 h-6 text-indigo-600" /> Patient Directory</h2><div className="bg-white rounded-xl border border-slate-200 flex-1 overflow-hidden shadow-sm flex flex-col"><div className="overflow-y-auto flex-1"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b sticky top-0"><tr><th className="p-4">Name</th><th className="p-4">Phone</th><th className="p-4">Gender</th><th className="p-4">Age</th><th className="p-4">Registered</th></tr></thead><tbody className="divide-y divide-slate-50">{patients.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-bold text-slate-800">{p.fullName}</td><td className="p-4 text-slate-600">{p.phone}</td><td className="p-4 capitalize text-slate-600">{p.gender}</td><td className="p-4 text-slate-600">{calculateAge(p.dob)} yrs</td><td className="p-4 text-slate-500 text-xs">{formatDate(p.createdAt)}</td></tr>))}</tbody></table></div></div></div>);
+    return (<div className="h-full flex flex-col">
+        <div className="flex items-center gap-2 mb-6">
+            {onBack && <button onClick={onBack} className="p-2 rounded-full hover:bg-slate-100 transition-colors"><ArrowLeft className="w-6 h-6 text-indigo-600" /></button>}
+            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Users className="w-6 h-6 text-indigo-600" /> Patient Directory</h2>
+        </div><div className="bg-white rounded-xl border border-slate-200 flex-1 overflow-hidden shadow-sm flex flex-col"><div className="overflow-y-auto flex-1"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b sticky top-0"><tr><th className="p-4">Name</th><th className="p-4">Phone</th><th className="p-4">Gender</th><th className="p-4">Age</th><th className="p-4">Registered</th></tr></thead><tbody className="divide-y divide-slate-50">{patients.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-bold text-slate-800">{p.fullName}</td><td className="p-4 text-slate-600">{p.phone}</td><td className="p-4 capitalize text-slate-600">{p.gender}</td><td className="p-4 text-slate-600">{calculateAge(p.dob)} yrs</td><td className="p-4 text-slate-500 text-xs">{formatDate(p.createdAt)}</td></tr>))}</tbody></table></div></div></div>);
 };
 
-const InventoryModule: React.FC<{ role: Role }> = ({ role }) => {
+const InventoryModule: React.FC<{ role: Role | null; onBack?: () => void }> = ({ role, onBack }) => {
     const { showAlert, showConfirm, showPrompt, showToast } = useDialog();
-    const isManager = canManageInventory(role);
+    const isManager = role ? canManageInventory(role) : false;
     const [subView, setSubView] = useState<'dashboard' | 'items' | 'requests' | 'wastage' | 'vendors'>(isManager ? 'dashboard' : 'requests');
     const [items, setItems] = useState<InventoryItem[]>([]);
     const [requests, setRequests] = useState<InventoryRequest[]>([]);
@@ -2471,17 +2723,31 @@ const InventoryModule: React.FC<{ role: Role }> = ({ role }) => {
         // Non-managers only see request interface
         return (
             <div className="p-6 h-full">
-                <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Truck className="w-6 h-6 text-indigo-600" /> Request Inventory</h2>
+                <div className="flex items-center gap-2 mb-6">
+                    {onBack && <button onClick={onBack} className="p-2 rounded-full hover:bg-slate-200 transition-colors"><ArrowLeft className="w-6 h-6 text-slate-800" /></button>}
+                    <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Truck className="w-6 h-6 text-indigo-600" /> Request Inventory</h2>
+                </div>
                 {renderRequests()}
             </div>
         );
     }
 
     // Manager view with tabs
+    const handleModuleBack = () => {
+        if (subView !== 'dashboard') {
+            setSubView('dashboard');
+        } else if (onBack) {
+            onBack();
+        }
+    };
+
     return (
         <div className="p-6 h-full flex flex-col">
             <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Package className="w-6 h-6 text-indigo-600" /> Inventory Management</h2>
+                <div className="flex items-center gap-2">
+                    {onBack && <button onClick={handleModuleBack} className="p-2 rounded-full hover:bg-slate-200 transition-colors"><ArrowLeft className="w-6 h-6 text-slate-800" /></button>}
+                    <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Package className="w-6 h-6 text-indigo-600" /> Inventory Management</h2>
+                </div>
                 <div className="flex bg-slate-100 p-1 rounded-lg">
                     {[{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }, { id: 'items', label: 'Items', icon: Package }, { id: 'requests', label: 'Requests', icon: Truck }, { id: 'wastage', label: 'Wastage', icon: AlertCircle }].map(tab => (
                         <button key={tab.id} onClick={() => setSubView(tab.id as any)} className={`px-3 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 transition-all ${subView === tab.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}><tab.icon className="w-4 h-4" /> <span>{tab.label}</span></button>
@@ -2494,6 +2760,47 @@ const InventoryModule: React.FC<{ role: Role }> = ({ role }) => {
                 {subView === 'items' && renderItemsList()}
                 {subView === 'requests' && renderRequests()}
                 {subView === 'wastage' && <div className="bg-white p-8 rounded-xl border text-center text-slate-400">Wastage tracking coming soon...</div>}
+            </div>
+        </div>
+    );
+};
+
+const AdminTopBar: React.FC<{ activeTab?: string }> = ({ activeTab }) => {
+    const navigate = useNavigate();
+    const tabs = [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/admin' },
+        { id: 'users', label: 'Users', icon: Users, path: '/admin_users' },
+        { id: 'tests', label: 'Tests', icon: FlaskConical, path: '/admin_tests' },
+        { id: 'finance', label: 'Finance', icon: DollarSign, path: '/admin_finance' },
+        { id: 'reports', label: 'Reports', icon: FileBarChart, path: '/admin_reports' },
+        { id: 'logs', label: 'Logs', icon: ScrollText, path: '/admin_logs' },
+        { id: 'settings', label: 'Settings', icon: Settings, path: '/admin_settings' },
+    ];
+
+    return (
+        <div className="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center shrink-0 mb-4 shadow-sm z-30">
+            <div className="flex items-center gap-4">
+                <button onClick={() => navigate('/admin')} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 transition-colors" title="Back to Dashboard">
+                    <ArrowLeft className="w-5 h-5" />
+                </button>
+                <div className="h-6 w-px bg-slate-200" />
+                <h2 className="text-xl font-bold text-slate-800 hidden md:block">Administration</h2>
+            </div>
+
+            <div className="flex bg-slate-100 p-1 rounded-lg overflow-x-auto custom-scrollbar">
+                {tabs.map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => navigate(tab.path)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === tab.id
+                            ? 'bg-white text-indigo-600 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                            }`}
+                    >
+                        <tab.icon className="w-4 h-4" />
+                        <span className="hidden xl:inline">{tab.label}</span>
+                    </button>
+                ))}
             </div>
         </div>
     );
@@ -2517,9 +2824,12 @@ const AdminUsers: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const handleDelete = async (id: string) => { if (window.confirm("Remove user?")) await db.collection('users').doc(id).delete(); };
 
     return (
-        <div className="h-full flex flex-col">
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold" style={{ color: COLORS.CITRON }}>User Management</h2>
+        <div className="h-full flex flex-col bg-slate-50">
+            <AdminTopBar activeTab="users" />
+            <div className="flex justify-between items-center mb-6 px-6">
+                <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-bold text-slate-800">User Management</h2>
+                </div>
                 <button onClick={() => setShowModal(true)} className="text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:opacity-90" style={{ backgroundColor: COLORS.GAMBOGE }}>
                     <UserPlus className="w-4 h-4" /> Add User
                 </button>
@@ -3215,9 +3525,12 @@ const TestManagementModule: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     };
 
     return (
-        <div className="p-6 h-full flex flex-col">
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-slate-800">Test Catalog Management</h2>
+        <div className="h-full flex flex-col bg-slate-50">
+            <AdminTopBar activeTab="tests" />
+            <div className="flex justify-between items-center mb-6 px-6">
+                <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-bold text-slate-800">Test Catalog Management</h2>
+                </div>
                 <div className="flex gap-2">
                     {isEditing ? (
                         <>
@@ -3277,21 +3590,951 @@ const TestManagementModule: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 };
 
 const AdminFinance: React.FC<{ onBack: () => void, onNavigate: (view: ViewState) => void }> = ({ onBack, onNavigate }) => {
-    return (<div className="h-full flex flex-col p-6"><h2 className="text-2xl font-bold text-slate-800 mb-6">Admin Finance Control</h2><div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"><FinanceModule /></div></div>);
+    return (<div className="h-full flex flex-col bg-slate-50">
+        <AdminTopBar activeTab="finance" />
+        <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mx-6 mb-6"><FinanceModule /></div></div>);
 };
 
+
+// --- Reporting Components ---
+
+const ReportContainer: React.FC<{ children: React.ReactNode; title: string }> = ({ children, title }) => (
+    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm print:border-0 print:shadow-none break-inside-avoid mb-6">
+        <h4 className="font-bold text-slate-700 mb-4 print:text-black">{title}</h4>
+        {children}
+    </div>
+);
+
+const EmptyState: React.FC<{ message?: string }> = ({ message = "No data available." }) => (
+    <div className="flex flex-col items-center justify-center py-12 text-center h-48 bg-slate-50 rounded-lg border-2 border-dashed border-slate-200">
+        <div className="bg-slate-100 p-3 rounded-full mb-3">
+            <Filter className="w-6 h-6 text-slate-400" />
+        </div>
+        <p className="text-slate-500 font-medium">{message}</p>
+    </div>
+);
+
+const ReportChart: React.FC<{ title: string; type: 'bar' | 'line' | 'pie' | 'kpi' | 'table'; data: any[]; color?: string; subtitle?: string }> = ({ title, type, data, color = COLORS.PERSIAN_GREEN, subtitle }) => {
+    // Safety check for data
+    if (!data || data.length === 0) {
+        return (
+            <ReportContainer title={title}>
+                <div className="h-48 flex items-center justify-center text-slate-400 text-sm italic border rounded-lg bg-slate-50">
+                    No data available
+                </div>
+            </ReportContainer>
+        );
+    }
+
+    return (
+        <ReportContainer title={title}>
+            {subtitle && <p className="text-xs text-slate-400 mb-4 -mt-2">{subtitle}</p>}
+
+            {/* KPI Tile */}
+            {type === 'kpi' && (
+                <div className="flex items-end gap-2 mt-2">
+                    <span className="text-4xl font-bold" style={{ color }}>{data[0]?.value}</span>
+                    <span className="text-sm text-slate-500 mb-1.5">{data[0]?.label}</span>
+                </div>
+            )}
+
+            {/* Bar Chart */}
+            {type === 'bar' && (
+                <div className="mt-4 h-48 flex items-end gap-2 text-xs text-slate-500">
+                    {data.map((d, i) => {
+                        const max = Math.max(...data.map(x => typeof x.value === 'number' ? x.value : 0), 1);
+                        const val = typeof d.value === 'number' ? d.value : 0;
+                        const h = max === 0 ? 0 : (val / max) * 100;
+                        return (
+                            <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+                                <div className="absolute bottom-full mb-1 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">{d.label}: {val}</div>
+                                <div className="w-full rounded-t transition-all duration-500" style={{ height: `${h}%`, backgroundColor: d.color || color, minHeight: h > 0 ? '4px' : '0' }}></div>
+                                <span className="truncate w-full text-center text-[10px]">{d.label.substring(0, 10)}</span>
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
+
+            {/* Line Chart */}
+            {type === 'line' && (
+                <div className="mt-4 h-48 relative border-l border-b border-slate-200">
+                    <svg className="absolute inset-0 w-full h-full overflow-visible" preserveAspectRatio="none">
+                        <polyline
+                            points={data.map((d, i) => {
+                                const max = Math.max(...data.map(x => typeof x.value === 'number' ? x.value : 0), 1);
+                                const val = typeof d.value === 'number' ? d.value : 0;
+                                const x = (i / (data.length - 1 || 1)) * 100;
+                                const y = 100 - ((val / max) * 100);
+                                return `${x},${y}`;
+                            }).join(' ')}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth="2"
+                            vectorEffect="non-scaling-stroke"
+                        />
+                        {data.map((d, i) => {
+                            const max = Math.max(...data.map(x => typeof x.value === 'number' ? x.value : 0), 1);
+                            const val = typeof d.value === 'number' ? d.value : 0;
+                            const x = (i / (data.length - 1 || 1)) * 100;
+                            const y = 100 - ((val / max) * 100);
+                            return (
+                                <circle key={i} cx={`${x}%`} cy={`${y}%`} r="3" fill="white" stroke={color} strokeWidth="2" />
+                            );
+                        })}
+                    </svg>
+                    <div className="absolute top-100 w-full flex justify-between mt-2 text-[10px] text-slate-400">
+                        {data.filter((_, i) => i === 0 || i === data.length - 1 || i % Math.max(1, Math.floor(data.length / 5)) === 0).map((d, i) => <span key={i}>{d.label}</span>)}
+                    </div>
+                </div>
+            )}
+
+            {/* Pie Chart */}
+            {type === 'pie' && (
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-8">
+                    <div className="w-32 h-32 rounded-full relative shrink-0" style={{
+                        background: `conic-gradient(${data.reduce((acc: string[], d, i) => {
+                            const total = data.reduce((s, x) => s + (typeof x.value === 'number' ? x.value : 0), 0);
+                            if (total === 0) return acc;
+                            const prevVal = data.slice(0, i).reduce((s, x) => s + (typeof x.value === 'number' ? x.value : 0), 0);
+                            const start = (prevVal / total) * 100;
+                            const currentVal = typeof d.value === 'number' ? d.value : 0;
+                            const end = start + ((currentVal / total) * 100);
+                            acc.push(`${d.color || color} ${start}% ${end}%`);
+                            return acc;
+                        }, []).join(', ')})`
+                    }}></div>
+                    <div className="space-y-1">
+                        {data.map((d, i) => (
+                            <div key={i} className="flex items-center gap-2 text-xs">
+                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: d.color || color }}></div>
+                                <span className="text-slate-600">{d.label} <span className="font-bold">({d.value})</span></span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </ReportContainer>
+    );
+};
+
+// --- Main Reports Component ---
 const AdminReports: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-    return (<div className="h-full flex flex-col"><h2 className="text-2xl font-bold mb-6 text-slate-800">Analytics & Reports</h2><div className="bg-white p-12 text-center rounded-xl border border-slate-200 flex flex-col items-center justify-center flex-1"><FileBarChart className="w-16 h-16 text-slate-200 mb-4" /><p className="text-slate-500 font-medium">Detailed analytics module is currently under development.</p><p className="text-sm text-slate-400 mt-2">Please use the Finance or Dashboard views for current summaries.</p></div></div>);
+    const [activeTab, setActiveTab] = useState('executive');
+    const [dateRange, setDateRange] = useState('month'); // daily, weekly, month, year
+    const [customRange, setCustomRange] = useState({ start: '', end: '' });
+    const [loading, setLoading] = useState(false);
+
+    // Data States
+    const [stats, setStats] = useState<any>({});
+    const [rawData, setRawData] = useState<any>({ orders: [], patients: [], inventory: [], logs: [], expenses: [] });
+
+    // Fetch All Required Data on Mount (Filtered by Date in Memory for Prototyping)
+    useEffect(() => {
+        setLoading(true);
+        // Robust Real-time listeners
+        const unsubscribeList: (() => void)[] = [];
+
+        try {
+            unsubscribeList.push(db.collection('orders').orderBy('createdAt', 'desc').limit(2000).onSnapshot(s => setRawData((p: any) => ({ ...p, orders: s.docs.map(d => ({ id: d.id, ...d.data() })) })), e => console.error("Orders err", e)));
+            unsubscribeList.push(db.collection('patients').orderBy('registeredAt', 'desc').limit(2000).onSnapshot(s => setRawData((p: any) => ({ ...p, patients: s.docs.map(d => ({ id: d.id, ...d.data() })) })), e => console.error("Patients err", e)));
+            unsubscribeList.push(db.collection('users').onSnapshot(s => setRawData((p: any) => ({ ...p, users: s.docs.map(d => ({ id: d.id, ...d.data() })) })), e => console.error("Users err", e)));
+            unsubscribeList.push(db.collection('inventory_items').onSnapshot(s => setRawData((p: any) => ({ ...p, inventory: s.docs.map(d => ({ id: d.id, ...d.data() })) })), e => console.error("Inv err", e)));
+            unsubscribeList.push(db.collection('expenses').orderBy('date', 'desc').limit(1000).onSnapshot(s => setRawData((p: any) => ({ ...p, expenses: s.docs.map(d => ({ id: d.id, ...d.data() })) })), e => console.error("Exp err", e)));
+            unsubscribeList.push(db.collection('audit_logs').orderBy('timestamp', 'desc').limit(500).onSnapshot(s => setRawData((p: any) => ({ ...p, logs: s.docs.map(d => ({ id: d.id, ...d.data() })) })), e => console.error("Logs err", e)));
+        } catch (e) {
+            console.error("Setup error", e);
+        }
+
+        setTimeout(() => setLoading(false), 1000);
+
+        return () => unsubscribeList.forEach(u => u());
+    }, []);
+
+    // Helper: Filter by Date
+    const checkDate = (dateVal: any) => {
+        try {
+            if (!dateVal) return false;
+            const d = dateVal?.toDate ? dateVal.toDate() : new Date(dateVal);
+            if (isNaN(d.getTime())) return false;
+
+            const now = new Date();
+            const y = now.getFullYear();
+            const m = now.getMonth();
+
+            if (dateRange === 'daily') return d.toDateString() === now.toDateString();
+            if (dateRange === 'weekly') { const start = new Date(now); start.setDate(start.getDate() - 7); return d >= start; }
+            if (dateRange === 'monthly') return d.getMonth() === m && d.getFullYear() === y;
+            if (dateRange === 'year') return d.getFullYear() === y;
+            if (dateRange === 'custom' && customRange.start && customRange.end) {
+                return d >= new Date(customRange.start) && d <= new Date(customRange.end);
+            }
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    // Calculate Metrics based on active tab & filters
+    const metrics = useMemo(() => {
+        try {
+            const fOrders = Array.isArray(rawData.orders) ? rawData.orders.filter((o: any) => checkDate(o.createdAt)) : [];
+            const fPatients = Array.isArray(rawData.patients) ? rawData.patients.filter((p: any) => checkDate(p.registeredAt)) : [];
+            const fExpenses = Array.isArray(rawData.expenses) ? rawData.expenses.filter((e: any) => checkDate(e.date)) : [];
+
+            // Core Calculations
+            const totalRev = fOrders.reduce((sum: number, o: any) => sum + (Number(o.totalAmount) || 0), 0);
+            const totalExp = fExpenses.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+            const netProfit = totalRev - totalExp;
+            const totalTests = fOrders.reduce((sum: number, o: any) => sum + (Array.isArray(o.tests) ? o.tests.length : 0), 0);
+
+            return { fOrders, fPatients, fExpenses, totalRev, totalExp, netProfit, totalTests };
+        } catch (e) {
+            console.error("Metrics Calc Error", e);
+            return { fOrders: [], fPatients: [], fExpenses: [], totalRev: 0, totalExp: 0, netProfit: 0, totalTests: 0 };
+        }
+    }, [rawData, dateRange, customRange]);
+
+    // --- Safe Data Generators ---
+    const getSalesData = () => {
+        try {
+            const testRevenue: Record<string, number> = {};
+            metrics.fOrders.forEach((o: any) => {
+                if (Array.isArray(o.tests)) {
+                    o.tests.forEach((t: any) => {
+                        if (t?.name) {
+                            testRevenue[t.name] = (testRevenue[t.name] || 0) + (Number(t.price) || 0);
+                        }
+                    });
+                }
+            });
+            const topTests = Object.entries(testRevenue)
+                .map(([k, v]) => ({ label: k, value: Number(v) || 0, color: COLORS.GAMBOGE }))
+                .sort((a, b) => b.value - a.value)
+                .slice(0, 5);
+
+            const paymentMethods = [
+                { label: 'Cash', value: metrics.fOrders.filter((o: any) => o.paymentMethod === 'cash').length, color: '#10b981' },
+                { label: 'Card', value: metrics.fOrders.filter((o: any) => o.paymentMethod === 'card').length, color: '#3b82f6' },
+                { label: 'Online', value: metrics.fOrders.filter((o: any) => o.paymentMethod === 'online').length },
+                { label: 'Credit', value: metrics.fOrders.filter((o: any) => o.paymentMethod === 'credit' || !o.paymentMethod).length, color: '#ef4444' }
+            ].filter(d => d.value > 0);
+
+            return { topTests, paymentMethods };
+        } catch (e) {
+            console.error("Sales Gen Error", e);
+            return { topTests: [], paymentMethods: [] };
+        }
+    };
+
+    const getInventoryData = () => {
+        try {
+            const inventory = Array.isArray(rawData.inventory) ? rawData.inventory : [];
+            const catValue: Record<string, number> = {};
+            inventory.forEach((i: any) => {
+                const val = (Number(i.quantity) || 0) * (Number(i.purchasePrice) || 0);
+                const cat = i.category || 'Uncategorized';
+                catValue[cat] = (catValue[cat] || 0) + val;
+            });
+            const valueShare = Object.entries(catValue).map(([k, v]) => ({ label: k, value: v }));
+            const lowStock = inventory
+                .filter((i: any) => (Number(i.quantity) || 0) <= (Number(i.minLevel) || 5))
+                .map((i: any) => ({ label: i.name, value: Number(i.quantity) || 0, color: '#ef4444' }));
+            return { valueShare, lowStock, inventory };
+        } catch (e) {
+            return { valueShare: [], lowStock: [], inventory: [] };
+        }
+    };
+
+    const getOperationalData = () => {
+        try {
+            const techLoad: Record<string, number> = {};
+            const dailyVol: Record<string, number> = {};
+            metrics.fOrders.forEach((o: any) => {
+                const techs: string[] = [];
+                if (o.processedBy) techs.push(o.processedBy);
+                if (techs.length === 0 && o.status === 'completed') techs.push('Unassigned');
+                techs.forEach(t => techLoad[t] = (techLoad[t] || 0) + (o.tests?.length || 1));
+
+                const dDate = new Date(o.createdAt?.toDate ? o.createdAt.toDate() : (o.createdAt || new Date()));
+                const d = isNaN(dDate.getTime()) ? 'Unknown' : dDate.toLocaleDateString();
+
+                dailyVol[d] = (dailyVol[d] || 0) + 1;
+            });
+            return {
+                techLoad: Object.entries(techLoad).map(([k, v]) => ({ label: k, value: v })),
+                dailyVol: Object.entries(dailyVol).map(([k, v]) => ({ label: k, value: v }))
+            };
+        } catch (e) {
+            return { techLoad: [], dailyVol: [] };
+        }
+    };
+
+    const salesData = getSalesData();
+    const invData = getInventoryData();
+    const opsData = getOperationalData();
+
+    const handlePrint = () => { window.print(); };
+
+    const handleExportPDF = () => {
+        try {
+            const doc: any = new jsPDF();
+
+            // Branding logic
+            doc.setFontSize(22);
+            doc.setTextColor(40, 40, 40);
+            doc.text("LABPRO DIAGNOSTICS", 14, 20);
+
+            doc.setFontSize(10);
+            doc.setTextColor(100, 100, 100);
+            doc.text("123 Medical Plaza, New York, NY 10001", 14, 26);
+            doc.text(`Report Period: ${dateRange.toUpperCase()}`, 14, 32);
+            doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 37);
+
+            doc.setDrawColor(200, 200, 200);
+            doc.line(14, 42, 196, 42);
+
+            // Summary Section
+            doc.setFontSize(14);
+            doc.setTextColor(0, 0, 0);
+            doc.text("Executive Summary", 14, 50);
+
+            doc.autoTable({
+                startY: 55,
+                head: [['Key Metric', 'Value']],
+                body: [
+                    ['Total Revenue', `$${metrics.totalRev.toLocaleString()}`],
+                    ['Total Tests', metrics.totalTests],
+                    ['Total Patients', metrics.fPatients.length],
+                    ['Total Expenses', `$${metrics.totalExp.toLocaleString()}`],
+                    ['Net Profit', `$${metrics.netProfit.toLocaleString()}`]
+                ],
+                theme: 'striped',
+                headStyles: { fillColor: [63, 81, 181] },
+                styles: { fontSize: 10 }
+            });
+
+            // Detailed Report based on Active Tab
+            let finalY = (doc as any).lastAutoTable.finalY + 15;
+
+            if (activeTab === 'sales' || activeTab === 'executive') {
+                doc.text("Sales Analysis", 14, finalY);
+
+                // Top Tests Table
+                doc.autoTable({
+                    startY: finalY + 5,
+                    head: [['Test Name', 'Revenue']],
+                    body: salesData.topTests.map(t => [t.label, `$${t.value.toLocaleString()}`]),
+                    theme: 'grid',
+                    headStyles: { fillColor: [63, 81, 181] }
+                });
+
+                finalY = (doc as any).lastAutoTable.finalY + 10;
+            }
+
+            if (activeTab === 'inventory') {
+                doc.addPage();
+                doc.text("Inventory Report", 14, 20);
+
+                const data = rawData.inventory.map((i: any) => [
+                    i.name,
+                    i.category || '-',
+                    i.quantity || 0,
+                    `$${i.purchasePrice || 0}`
+                ]);
+
+                doc.autoTable({
+                    startY: 25,
+                    head: [['Item Name', 'Category', 'Qty', 'Unit Cost']],
+                    body: data,
+                    theme: 'grid'
+                });
+            }
+
+            // Footer
+            const pageCount = doc.internal.getNumberOfPages();
+            for (let i = 1; i <= pageCount; i++) {
+                doc.setPage(i);
+                doc.setFontSize(8);
+                doc.text(`Page ${i} of ${pageCount}`, 196, 285, { align: 'right' });
+                doc.text('Confidential Report - LabPro Diagnostics', 14, 285);
+            }
+
+            doc.save(`LabPro_Report_${dateRange}_${new Date().toISOString().split('T')[0]}.pdf`);
+
+        } catch (e) {
+            console.error("PDF Export Error", e);
+            alert("Failed to generate PDF. Please ensure libraries are loaded.");
+        }
+    };
+
+    // Layout
+    return (
+        <div className="h-full flex flex-col bg-slate-50">
+            <style>{`
+                @media print {
+                    @page { margin: 1cm; size: landscape; }
+                    body { background: white !important; font-family: sans-serif; -webkit-print-color-adjust: exact; }
+                    .no-print { display: none !important; }
+                    .print-only { display: block !important; }
+                    .print-break { page-break-before: always; }
+                    .overflow-y-auto { overflow: visible !important; height: auto !important; }
+                    table { border-collapse: collapse; width: 100%; font-size: 10pt; }
+                    th, td { border: 1px solid #ddd; padding: 4px 8px; }
+                    th { background-color: #f8f9fa !important; }
+                    svg { max-height: 300px; }
+                    .break-inside-avoid { break-inside: avoid; }
+                    .print-footer { position: fixed; bottom: 0; width: 100%; border-top: 1px solid #ddd; padding-top: 8px; font-size: 10px; color: #94a3b8; background: white; }
+                }
+                .print-only { display: none; }
+            `}</style>
+
+            <div className="no-print">
+                <AdminTopBar activeTab="reports" />
+            </div>
+
+            {/* Print Header */}
+            <div className="print-only p-8 text-center border-b mb-6">
+                <h1 className="text-3xl font-bold text-slate-800">LABPRO DIAGNOSTICS</h1>
+                <p className="text-slate-500">Analytics & Performance Report</p>
+                <p className="text-sm mt-2 font-mono">{new Date().toLocaleDateString()} • {dateRange.toUpperCase()}</p>
+            </div>
+
+            <div className="px-6 pb-6 flex-1 flex flex-col overflow-hidden">
+                {/* Controls */}
+                <div className="flex flex-wrap justify-between items-center mb-6 gap-4 no-print">
+                    <div className="flex items-center gap-2">
+                        <h2 className="text-2xl font-bold text-slate-800">Analytics & Reports</h2>
+                    </div>
+                    <div className="flex gap-2 bg-white p-1 rounded-lg border border-slate-200 shadow-sm overflow-x-auto">
+                        {['executive', 'patient', 'sales', 'financial', 'inventory', 'operational', 'quality'].map(t => (
+                            <button
+                                key={t}
+                                onClick={() => setActiveTab(t)}
+                                className={`px-3 py-1.5 rounded text-xs font-bold capitalize transition-colors ${activeTab === t ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                            >
+                                {t}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex gap-2">
+                        <select className="px-3 py-2 rounded-lg border text-sm font-bold bg-white" value={dateRange} onChange={e => setDateRange(e.target.value)}>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="year">Yearly</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                        <button onClick={handlePrint} className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg font-bold text-sm hover:bg-slate-50">
+                            <Printer className="w-4 h-4" /> Print View
+                        </button>
+                        <button onClick={handleExportPDF} className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg font-bold text-sm hover:bg-slate-900">
+                            <FileText className="w-4 h-4" /> Download PDF
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar pb-20">
+                    {/* Summary Header for Reports (Visible in App & Print) */}
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6 flex justify-between items-center text-sm break-inside-avoid">
+                        <div>
+                            <span className="text-slate-400 block text-xs font-bold uppercase tracking-wider">Selected Period</span>
+                            <span className="font-bold text-lg capitalize text-slate-700">{dateRange} Overview</span>
+                        </div>
+                        <div className="text-right">
+                            <span className="text-slate-400 block text-xs font-bold uppercase tracking-wider">Total Revenue</span>
+                            <span className="font-bold text-xl text-emerald-600">${metrics.totalRev.toLocaleString()}</span>
+                        </div>
+                        <div className="text-right">
+                            <span className="text-slate-400 block text-xs font-bold uppercase tracking-wider">Total Tests</span>
+                            <span className="font-bold text-xl text-indigo-600">{metrics.totalTests}</span>
+                        </div>
+                        <div className="text-right">
+                            <span className="text-slate-400 block text-xs font-bold uppercase tracking-wider">New Patients</span>
+                            <span className="font-bold text-xl text-amber-500">{metrics.fPatients.length}</span>
+                        </div>
+                    </div>
+
+                    {/* --- REPORT CONTENT --- */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+                        {/* EXECUTIVE DASHBOARD */}
+                        {activeTab === 'executive' && (
+                            <>
+                                <ReportChart title="Total Patients" type="kpi" data={[{ label: 'Registered', value: metrics.fPatients.length }]} color={COLORS.GAMBOGE} />
+                                <ReportChart title="Net Profit" type="kpi" data={[{ label: 'Net Earnings', value: '$' + metrics.netProfit.toLocaleString() }]} color={COLORS.ALLOY_ORANGE} />
+                                <ReportChart title="Inventory Worth" type="kpi" data={[{ label: 'Current Assets', value: '$' + rawData.inventory.reduce((s: number, i: any) => s + (i.quantity * i.purchasePrice || 0), 0).toLocaleString() }]} color={COLORS.PERSIAN_GREEN} />
+
+                                <div className="col-span-1 md:col-span-2 lg:col-span-3">
+                                    <ReportChart
+                                        title="Revenue Trend"
+                                        type="line"
+                                        subtitle="Income over selected period"
+                                        data={Object.entries(metrics.fOrders.reduce((acc: any, o: any) => { const d = formatDate(o.createdAt).split(',')[0]; acc[d] = (acc[d] || 0) + o.totalAmount; return acc; }, {})).map(([k, v]) => ({ label: k, value: v }))}
+                                        color={COLORS.MIDNIGHT_GREEN}
+                                    />
+                                </div>
+                            </>
+                        )}
+
+                        {/* PATIENT REPORTS */}
+                        {activeTab === 'patient' && (
+                            <>
+                                <ReportChart title="Gender Distribution" type="pie" data={[
+                                    { label: 'Male', value: metrics.fPatients.filter((p: any) => p.gender === 'Male').length, color: '#3b82f6' },
+                                    { label: 'Female', value: metrics.fPatients.filter((p: any) => p.gender === 'Female').length, color: '#ec4899' }
+                                ]} />
+                                <ReportChart title="Age Groups" type="bar" data={[
+                                    { label: '0-18', value: metrics.fPatients.filter((p: any) => p.age < 18).length, color: '#818cf8' },
+                                    { label: '19-40', value: metrics.fPatients.filter((p: any) => p.age >= 19 && p.age <= 40).length, color: '#6366f1' },
+                                    { label: '41-60', value: metrics.fPatients.filter((p: any) => p.age >= 41 && p.age <= 60).length, color: '#4f46e5' },
+                                    { label: '60+', value: metrics.fPatients.filter((p: any) => p.age > 60).length, color: '#4338ca' }
+                                ]} />
+                                <ReportChart title="Registration Source" type="pie" data={[
+                                    { label: 'Walk-in', value: metrics.fOrders.filter((o: any) => !o.doctorId).length, color: '#10b981' },
+                                    { label: 'Referred', value: metrics.fOrders.filter((o: any) => o.doctorId).length, color: '#f59e0b' }
+                                ]} />
+                                <div className="col-span-full">
+                                    <h4 className="font-bold mb-2">Registration Trends</h4>
+                                    <ReportChart title="Registrations Over Time" type="line" data={
+                                        Object.entries(metrics.fPatients.reduce((acc: any, p: any) => { const d = formatDate(p.registeredAt).split(',')[0]; acc[d] = (acc[d] || 0) + 1; return acc; }, {})).map(([k, v]) => ({ label: k, value: v }))
+                                    } color={COLORS.TIFFANY_BLUE} />
+                                </div>
+                            </>
+                        )}
+
+                        {/* SALES REPORTS */}
+                        {activeTab === 'sales' && (
+                            <>
+                                <ReportChart title="Top Revenue Tests" type="bar" data={salesData.topTests} />
+                                <ReportChart title="Payment Methods" type="pie" data={salesData.paymentMethods} />
+                                <div className="col-span-full bg-white rounded-xl border p-4 break-inside-avoid">
+                                    <h4 className="font-bold mb-4">Daily Sales Log</h4>
+                                    <table className="w-full text-sm text-left">
+                                        <thead><tr className="border-b"><th className="pb-2">Date</th><th className="pb-2">Patient</th><th className="pb-2">Tests</th><th className="pb-2 text-right">Amount</th></tr></thead>
+                                        <tbody>
+                                            {metrics.fOrders.slice(0, 15).map((o: any) => (
+                                                <tr key={o.id} className="border-b last:border-0"><td className="py-2 text-xs">{formatDate(o.createdAt)}</td><td className="py-2 font-medium">{o.patientName}</td><td className="py-2 text-xs text-slate-500">{o.tests.length} Tests</td><td className="py-2 text-right font-bold text-emerald-600">${o.totalAmount}</td></tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </>
+                        )}
+
+                        {/* FINANCIAL REPORTS */}
+                        {activeTab === 'financial' && (
+                            <>
+                                <ReportChart title="Income vs Expenses" type="bar" data={[
+                                    { label: 'Income', value: metrics.totalRev, color: '#10b981' },
+                                    { label: 'Expense', value: metrics.totalExp, color: '#ef4444' }
+                                ]} />
+                                <ReportChart title="Expense Categories" type="pie" data={
+                                    Object.entries(metrics.fExpenses.reduce((acc: any, e: any) => {
+                                        acc[e.category] = (acc[e.category] || 0) + (Number(e.amount) || 0); return acc;
+                                    }, {})).map(([k, v]) => ({ label: k, value: v }))
+                                } />
+                                <div className="col-span-full bg-white rounded-xl border p-4 break-inside-avoid">
+                                    <h4 className="font-bold mb-4">P&L Detailed View</h4>
+                                    <div className="grid grid-cols-3 gap-4 text-center">
+                                        <div className="p-4 bg-green-50 rounded">
+                                            <p className="text-xs text-green-700 font-bold uppercase">Gross Revenue</p>
+                                            <p className="text-xl font-bold text-green-800">${metrics.totalRev.toLocaleString()}</p>
+                                        </div>
+                                        <div className="p-4 bg-red-50 rounded">
+                                            <p className="text-xs text-red-700 font-bold uppercase">Total Expenses</p>
+                                            <p className="text-xl font-bold text-red-800">${metrics.totalExp.toLocaleString()}</p>
+                                        </div>
+                                        <div className="p-4 bg-blue-50 rounded">
+                                            <p className="text-xs text-blue-700 font-bold uppercase">Net Profit</p>
+                                            <p className="text-xl font-bold text-blue-800">${metrics.netProfit.toLocaleString()}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {/* INVENTORY REPORTS */}
+                        {activeTab === 'inventory' && (
+                            <>
+                                <ReportChart title="Stock Value Share" type="pie" data={invData.valueShare} />
+                                <div className="col-span-1 md:col-span-2">
+                                    <ReportChart title="Low Stock Alerts" type="bar" data={invData.lowStock} />
+                                </div>
+                                <div className="col-span-full bg-white rounded-xl border p-4">
+                                    <h4 className="font-bold mb-2">Stock Expiry Risk (Next 30 Days)</h4>
+                                    <div className="space-y-2">
+                                        {rawData.inventory.filter((i: any) => {
+                                            if (!i.expiryDate) return false;
+                                            const d = i.expiryDate.toDate ? i.expiryDate.toDate() : new Date(i.expiryDate);
+                                            const days = (d.getTime() - new Date().getTime()) / (1000 * 3600 * 24);
+                                            return days > 0 && days < 30;
+                                        }).map((i: any) => (
+                                            <div key={i.id} className="flex justify-between p-2 bg-amber-50 rounded border border-amber-200">
+                                                <span className="font-bold text-amber-900">{i.name}</span>
+                                                <span className="text-amber-700">Expires in {Math.ceil((new Date(i.expiryDate.toDate()).getTime() - new Date().getTime()) / (1000 * 3600 * 24))} days</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {/* OPERATIONAL REPORTS */}
+                        {activeTab === 'operational' && (
+                            <>
+                                <div className="col-span-full">
+                                    <ReportChart title="Technician Workload" type="bar" data={opsData.techLoad} />
+                                </div>
+                                <div className="col-span-full">
+                                    <ReportChart title="Daily Sample Collections" type="line" data={opsData.dailyVol} />
+                                </div>
+                            </>
+                        )}
+
+                        {/* QUALITY REPORTS */}
+                        {activeTab === 'quality' && (
+                            <div className="col-span-full bg-white p-6 rounded-xl border">
+                                <h4 className="font-bold mb-4">Audit & Rejection Log</h4>
+                                <p className="text-sm text-slate-500 mb-4">Quality control metrics and system modification logs.</p>
+                                <div className="space-y-2">
+                                    {rawData.logs.slice(0, 10).map((l: any) => (
+                                        <div key={l.id} className="text-sm p-3 bg-slate-50 rounded border flex justify-between items-center">
+                                            <div className="flex flex-col">
+                                                <span className="font-bold text-slate-700">{l.action}</span>
+                                                <span className="text-xs text-slate-500">{l.details}</span>
+                                            </div>
+                                            <div className="text-right">
+                                                <span className="block font-bold text-indigo-600">{l.userName}</span>
+                                                <span className="text-xs text-slate-400">{formatTimeSafe(l.timestamp)}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="mt-8 text-center no-print border-t pt-6">
+                        <p className="text-xs text-slate-400">Generated by LabPro Analytics Engine • Confidentially Report</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Print Footer */}
+            <div className="print-footer print-only flex justify-between">
+                <span>Generated by LabPro Analytics Engine</span>
+                <span>Confidential Report • {new Date().toLocaleDateString()}</span>
+            </div>
+        </div>
+    );
 };
 
 const AdminLogs: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const [logs, setLogs] = useState<AuditLog[]>([]);
     useEffect(() => { const u = db.collection('audit_logs').orderBy('timestamp', 'desc').limit(50).onSnapshot(s => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() } as AuditLog)))); return () => u(); }, []);
-    return (<div className="h-full flex flex-col"><h2 className="text-2xl font-bold mb-6 text-slate-800">System Audit Logs</h2><div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col"><div className="overflow-y-auto flex-1"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b sticky top-0"><tr><th className="p-4">Time</th><th className="p-4">User</th><th className="p-4">Action</th><th className="p-4">Details</th></tr></thead><tbody className="divide-y divide-slate-50">{logs.map(l => (<tr key={l.id} className="hover:bg-slate-50"><td className="p-4 text-xs font-mono text-slate-500">{formatTimeSafe(l.timestamp)}</td><td className="p-4 font-bold text-slate-800">{l.userName}</td><td className="p-4 font-bold text-indigo-600">{l.action}</td><td className="p-4 text-slate-600">{l.details}</td></tr>))}</tbody></table></div></div></div>);
+    return (<div className="h-full flex flex-col bg-slate-50">
+        <AdminTopBar activeTab="logs" />
+        <div className="px-6 pb-6 flex-1 flex flex-col">
+            <div className="flex items-center gap-2 mb-6">
+                <h2 className="text-2xl font-bold text-slate-800">System Audit Logs</h2>
+            </div>
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1 overflow-hidden flex flex-col"><div className="overflow-y-auto flex-1"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b sticky top-0"><tr><th className="p-4">Time</th><th className="p-4">User</th><th className="p-4">Action</th><th className="p-4">Details</th></tr></thead><tbody className="divide-y divide-slate-50">{logs.map(l => (<tr key={l.id} className="hover:bg-slate-50"><td className="p-4 text-xs font-mono text-slate-500">{formatTimeSafe(l.timestamp)}</td><td className="p-4 font-bold text-slate-800">{l.userName}</td><td className="p-4 font-bold text-indigo-600">{l.action}</td><td className="p-4 text-slate-600">{l.details}</td></tr>))}</tbody></table></div></div>
+        </div>
+    </div>);
 };
 
 const AdminSettings: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-    return (<div className="h-full flex flex-col"><h2 className="text-2xl font-bold mb-6 text-slate-800">System Configuration</h2><div className="bg-white p-8 rounded-xl border border-slate-200 max-w-2xl space-y-6"><div><label className="block font-bold text-slate-700 mb-2">Laboratory Name</label><input className="border border-slate-300 p-3 rounded-lg w-full outline-none focus:ring-2 focus:ring-indigo-500" defaultValue="LabPro Diagnostics" /></div><div><label className="block font-bold text-slate-700 mb-2">Address</label><input className="border border-slate-300 p-3 rounded-lg w-full outline-none focus:ring-2 focus:ring-indigo-500" defaultValue="123 Medical Plaza, NY" /></div><div><label className="block font-bold text-slate-700 mb-2">Contact Phone</label><input className="border border-slate-300 p-3 rounded-lg w-full outline-none focus:ring-2 focus:ring-indigo-500" defaultValue="+1 (555) 123-4567" /></div><div className="pt-4"><button className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors">Save Changes</button></div></div></div>);
+    return (<div className="h-full flex flex-col bg-slate-50">
+        <AdminTopBar activeTab="settings" />
+        <div className="px-6">
+            <div className="flex items-center gap-2 mb-6">
+                <h2 className="text-2xl font-bold text-slate-800">System Settings</h2>
+            </div>
+            <h2 className="text-2xl font-bold text-slate-800">System Configuration</h2>
+        </div><div className="bg-white p-8 rounded-xl border border-slate-200 max-w-2xl space-y-6"><div><label className="block font-bold text-slate-700 mb-2">Laboratory Name</label><input className="border border-slate-300 p-3 rounded-lg w-full outline-none focus:ring-2 focus:ring-indigo-500" defaultValue="LabPro Diagnostics" /></div><div><label className="block font-bold text-slate-700 mb-2">Address</label><input className="border border-slate-300 p-3 rounded-lg w-full outline-none focus:ring-2 focus:ring-indigo-500" defaultValue="123 Medical Plaza, NY" /></div><div><label className="block font-bold text-slate-700 mb-2">Contact Phone</label><input className="border border-slate-300 p-3 rounded-lg w-full outline-none focus:ring-2 focus:ring-indigo-500" defaultValue="+1 (555) 123-4567" /></div><div className="pt-4"><button className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors">Save Changes</button></div></div></div>);
+};
+
+// --- Print Modal Components ---
+
+const PrintReportModal: React.FC<{ data: Sample[] | Sample; onClose: () => void }> = ({ data, onClose }) => {
+    const samples = Array.isArray(data) ? data : [data];
+    const handlePrint = () => window.print();
+
+    // Handle keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Enter') handlePrint();
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
+    if (!samples || samples.length === 0) return null;
+    const firstSample = samples[0];
+
+    return (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[1000] p-4 print:p-0 print:bg-white print:fixed print:inset-0 print:z-[9999]" onClick={onClose}>
+            {/* Printable content wrapper */}
+            <div className="print-modal-root bg-white w-full max-w-4xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] print:max-h-none print:shadow-none print:w-full print:max-w-none print:rounded-none print:h-full print:absolute print:top-0 print:left-0" onClick={e => e.stopPropagation()}>
+
+                {/* Header - Hidden on print */}
+                <div className="bg-slate-800 text-white p-4 flex justify-between items-center print:hidden shrink-0">
+                    <h3 className="font-bold flex items-center gap-2"><FileText className="w-5 h-5" /> Report Preview</h3>
+                    <div className="flex gap-2">
+                        <button onClick={handlePrint} className="bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-all" title="Press Enter to Print">Print Now</button>
+                        <button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-all" title="Press Esc to Close">Close</button>
+                    </div>
+                </div>
+
+                {/* Report Content */}
+                <div className="printable-area p-8 overflow-y-auto font-serif text-slate-900 bg-white h-full print:p-8 print:overflow-visible">
+                    {/* Header Section */}
+                    <div className="border-b-4 border-slate-900 pb-6 mb-8 flex justify-between items-end">
+                        <div className="w-2/3">
+                            <h1 className="text-4xl font-black tracking-tight text-slate-900 uppercase">LabPro Diagnostics</h1>
+                            <p className="text-sm font-medium text-slate-600 mt-2">123 Medical Plaza, Suite 400, New York, NY 10001</p>
+                            <p className="text-sm font-medium text-slate-600">Phone: +1 (555) 123-4567 | Email: reports@labpro.com</p>
+                            <p className="text-xs text-slate-500 mt-1">ISO 15189:2012 Certified Laboratory</p>
+                        </div>
+                        <div className="text-right w-1/3">
+                            <h2 className="text-2xl font-bold uppercase tracking-widest text-slate-300">Medical Report</h2>
+                            <p className="font-mono font-bold text-lg mt-1 text-slate-900">SID: {firstSample.sampleLabelId || firstSample.id.slice(0, 8).toUpperCase()}</p>
+                            <p className="text-sm text-slate-500 font-medium">{formatDate(firstSample.reportedAt || new Date())}</p>
+                        </div>
+                    </div>
+
+                    {/* Patient Details Grid */}
+                    <div className="grid grid-cols-2 gap-x-12 gap-y-4 mb-8 bg-slate-50 p-6 rounded-lg border border-slate-100 print:bg-transparent print:p-0 print:border-0 print:border-b print:border-slate-200 print:pb-4 print:mb-8 print:rounded-none">
+                        <div className="flex justify-between border-b border-slate-200 pb-1">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Patient Name</span>
+                            <span className="font-bold text-slate-900 text-lg">{firstSample.patientName}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-200 pb-1">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Age / Gender</span>
+                            <span className="font-bold text-slate-900">{firstSample.patientAge || '--'} Yrs / {firstSample.patientGender || '--'}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-200 pb-1">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Referred By</span>
+                            <span className="font-bold text-slate-900">Dr. {firstSample.doctorName || 'Self'}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-200 pb-1">
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Phone</span>
+                            <span className="font-bold text-slate-900">{firstSample.patientPhone || '--'}</span>
+                        </div>
+                    </div>
+
+                    {/* Tests Loop */}
+                    <div className="space-y-10">
+                        {samples.map((sample, index) => (
+                            <div key={sample.id} className={index > 0 ? "pt-8 border-t-2 border-dashed border-slate-200 print:break-before-auto" : ""}>
+                                <div className="mb-6 flex items-center gap-4">
+                                    <h3 className="text-xl font-bold text-slate-900 uppercase border-b-2 border-slate-900 inline-block pb-1">{sample.testName}</h3>
+                                    <span className="text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-500 uppercase tracking-wider print:bg-transparent print:border print:border-slate-300">Sample: {sample.sampleType}</span>
+                                </div>
+
+                                <table className="w-full text-left mb-6">
+                                    <thead className="border-b-2 border-slate-800">
+                                        <tr>
+                                            <th className="py-2 pl-2 font-bold uppercase text-xs text-slate-600 w-1/2">Investigation</th>
+                                            <th className="py-2 font-bold uppercase text-xs text-slate-600 w-1/4">Result</th>
+                                            <th className="py-2 font-bold uppercase text-xs text-slate-600 w-1/4 text-right pr-2">Reference Range</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {sample.results && Object.entries(sample.results).map(([key, val]: [string, any]) => {
+                                            const value = typeof val === 'object' ? val.value : val;
+                                            const unit = typeof val === 'object' ? val.unit : '';
+                                            const flag = typeof val === 'object' ? val.flag : 'N';
+                                            const isCritical = flag === 'CL' || flag === 'CH';
+                                            const isAbnormal = flag === 'L' || flag === 'H';
+                                            const flagLabel = { 'N': '', 'L': 'LOW', 'H': 'HIGH', 'CL': 'CRITICAL LOW', 'CH': 'CRITICAL HIGH' }[flag as string] || '';
+
+                                            return (
+                                                <tr key={key}>
+                                                    <td className="py-3 pl-2 font-medium text-slate-800">{key}</td>
+                                                    <td className="py-3">
+                                                        <span className={`font-bold text-md ${isCritical ? 'text-red-600 print:text-black print:font-black' : isAbnormal ? 'text-amber-700 print:text-black print:font-bold' : 'text-slate-900'}`}>{value}</span>
+                                                        <span className="text-slate-500 text-xs ml-1">{unit}</span>
+                                                        {flagLabel && <span className={`text-[10px] ml-2 font-bold px-1.5 py-0.5 rounded ${isCritical ? 'bg-red-100 text-red-700 print:border print:border-black' : 'bg-amber-100 text-amber-700 print:italic'}`}>{flagLabel}</span>}
+                                                    </td>
+                                                    <td className="py-3 text-right pr-2 text-slate-500 text-sm">--</td>
+                                                </tr>
+                                            );
+                                        })}
+                                        {(!sample.results || Object.keys(sample.results).length === 0) && (
+                                            <tr><td colSpan={3} className="py-4 text-center text-slate-400 italic">No quantitative results recorded.</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+
+                                {(sample.conclusion || sample.pathologistRemarks) && (
+                                    <div className="mb-4 bg-slate-50 p-4 rounded border border-slate-100 print:bg-transparent print:border print:border-slate-300">
+                                        {sample.conclusion && (
+                                            <div className="mb-2">
+                                                <h4 className="font-bold text-xs uppercase text-slate-500 mb-1">Pathologist's Conclusion</h4>
+                                                <p className="text-slate-900 text-sm font-medium">{sample.conclusion}</p>
+                                            </div>
+                                        )}
+                                        {sample.pathologistRemarks && (
+                                            <div>
+                                                <h4 className="font-bold text-xs uppercase text-slate-500 mb-1">Remarks</h4>
+                                                <p className="text-slate-800 text-sm">{sample.pathologistRemarks}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Footer / Signature */}
+                    <div className="mt-16 pt-8 flex justify-end print:break-inside-avoid">
+                        <div className="text-center w-56">
+                            <div className="h-20 mb-2 border-b border-slate-900 flex items-end justify-center pb-2">
+                                <span className="font-cursive text-2xl text-slate-600 italic">Dr. A. Pathologist</span>
+                            </div>
+                            <p className="font-bold text-sm text-slate-900 uppercase">Dr. Alice Pathologist</p>
+                            <p className="text-xs text-slate-500">MD, Pathology (Reg: 12345)</p>
+                            <p className="text-xs text-slate-400 mt-1">Chief Pathologist</p>
+                        </div>
+                    </div>
+
+                    <div className="mt-8 pt-4 border-t border-slate-200 text-center text-[10px] text-slate-400 flex justify-between">
+                        <span>Generated by LabPro System</span>
+                        <span>{new Date().toLocaleString()}</span>
+                        <span>Page 1 of 1</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const PrintInvoiceModal: React.FC<{ data: PrintableInvoiceData; onClose: () => void }> = ({ data, onClose }) => {
+    const handlePrint = () => window.print();
+
+    // Handle keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Enter') handlePrint();
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
+    if (!data) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[1000] p-4 print:p-0 print:bg-white print:fixed print:inset-0 print:z-[9999]" onClick={onClose}>
+            {/* Printable content wrapper */}
+            <div className="print-modal-root bg-white w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] print:max-h-none print:shadow-none print:w-full print:max-w-none print:rounded-none print:h-full print:absolute print:top-0 print:left-0" onClick={e => e.stopPropagation()}>
+
+                {/* Header - Hidden on print */}
+                <div className="bg-slate-800 text-white p-4 flex justify-between items-center print:hidden shrink-0">
+                    <h3 className="font-bold flex items-center gap-2"><Printer className="w-5 h-5" /> Print Preview</h3>
+                    <div className="flex gap-2">
+                        <button onClick={handlePrint} className="bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-all" title="Press Enter to Print">Print Now</button>
+                        <button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-all" title="Press Esc to Close">Close</button>
+                    </div>
+                </div>
+
+                {/* Invoice Content */}
+                <div className="p-10 print:p-8 text-slate-900 font-serif h-full flex flex-col overflow-y-auto print:overflow-visible">
+                    {/* Header */}
+                    <div className="border-b-2 border-slate-800 pb-6 mb-6 flex justify-between items-start">
+                        <div>
+                            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">LabPro Diagnostics</h1>
+                            <p className="text-sm text-slate-600 mt-2 leading-relaxed">123 Medical Plaza, Suite 400<br />New York, NY 10001<br />Phone: +1 (555) 123-4567</p>
+                        </div>
+                        <div className="text-right">
+                            <h2 className="text-xl font-bold uppercase tracking-widest text-slate-400">Invoice</h2>
+                            <p className="font-mono font-bold text-xl mt-1 text-slate-900">#{(data.orderId || data.invoiceId || 'N/A').slice(0, 8).toUpperCase()}</p>
+                            <p className="text-sm text-slate-500 mt-1">{formatDate(data.date || new Date())}</p>
+                        </div>
+                    </div>
+
+                    {/* Patient Details */}
+                    <div className="flex justify-between mb-8 bg-slate-50 p-5 rounded-lg border border-slate-100 print:bg-transparent print:p-0 print:border-0">
+                        <div>
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Patient Details</p>
+                            <p className="font-bold text-lg text-slate-800">{data.patientName || 'N/A'}</p>
+                            <p className="text-sm text-slate-700">{data.patientAge || data.age || '--'} / {data.patientGender || data.gender || '--'}</p>
+                            <p className="text-sm text-slate-700">{data.patientPhone || 'N/A'}</p>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Referred By</p>
+                            <p className="font-bold text-slate-800">{data.doctorName || data.doctor || 'Self'}</p>
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-4 mb-1">Payment Mode</p>
+                            <p className="uppercase font-bold text-slate-800">{data.paymentMethod || 'Cash'}</p>
+                        </div>
+                    </div>
+
+                    {/* Items Table */}
+                    <div className="flex-1">
+                        <table className="w-full text-left mb-8">
+                            <thead className="border-b-2 border-slate-200">
+                                <tr>
+                                    <th className="py-2 text-sm font-bold uppercase text-slate-500">Test Description</th>
+                                    <th className="py-2 text-right text-sm font-bold uppercase text-slate-500">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {(data.items || []).map((item, idx) => (
+                                    <tr key={idx}>
+                                        <td className="py-3">
+                                            <p className="font-bold text-slate-800">{item.testName || item.name || 'N/A'}</p>
+                                            <p className="text-xs text-slate-500">{item.code || ''}</p>
+                                        </td>
+                                        <td className="py-3 text-right font-mono font-medium text-slate-700">${(item.price || 0).toFixed(2)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* Financial Summary */}
+                    <div className="flex justify-end border-t border-slate-200 pt-6">
+                        <div className="w-56 space-y-2">
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-500 font-medium">Subtotal:</span>
+                                <span className="font-mono font-bold text-slate-700">${(data.subtotal || data.amount || 0).toFixed(2)}</span>
+                            </div>
+                            {(data.discount || 0) > 0 && (
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-slate-500 font-medium">Discount:</span>
+                                    <span className="font-mono font-bold text-red-500">-${(data.discount || 0).toFixed(2)}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between text-xl font-bold border-t border-slate-800 pt-3 mt-2 text-slate-900">
+                                <span>Total:</span>
+                                <span>${(data.total || ((data.amount || 0) - (data.discount || 0))).toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm mt-4 pt-4 border-t border-slate-200">
+                                <span className="text-slate-500 font-medium">Amount Paid:</span>
+                                <span className="font-mono font-bold text-slate-700">${(data.paid || data.paidAmount || 0).toFixed(2)}</span>
+                            </div>
+                            {((data.due || 0) > 0 || (((data.total || data.amount || 0) - (data.discount || 0)) - (data.paid || data.paidAmount || 0)) > 0) && (
+                                <div className="flex justify-between text-sm text-red-600 bg-red-50 p-2 rounded mt-2 print:bg-transparent print:p-0 print:text-red-600">
+                                    <span className="font-bold">Balance Due:</span>
+                                    <span className="font-mono font-bold">${(data.due || ((data.total || data.amount || 0) - (data.discount || 0) - (data.paid || data.paidAmount || 0))).toFixed(2)}</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="mt-12 pt-8 border-t border-slate-200 text-center text-xs text-slate-400">
+                        <p>Thank you for choosing LabPro Diagnostics.</p>
+                        <p>This is a computer generated invoice and does not require a signature.</p>
+                        <p className="mt-2 font-mono">{data.orderId || data.invoiceId || 'N/A'}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
@@ -3304,7 +4547,50 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
     const [trackerSamples, setTrackerSamples] = useState<Sample[]>([]);
     const [notifications, setNotifications] = useState<{ id: string, text: string, type: 'alert' | 'info' }[]>([]);
     const [printData, setPrintData] = useState<PrintableInvoiceData | null>(null);
-    const [viewReport, setViewReport] = useState<Sample | null>(null);
+    const [viewPatientDetails, setViewPatientDetails] = useState<Patient | null>(null);
+
+    const getDuration = (start: any, end: any) => {
+        if (!start) return '--';
+        const s = start.toDate ? start.toDate() : new Date(start);
+        if (!end) return '--';
+        const e = end.toDate ? end.toDate() : new Date(end);
+        const diff = Math.max(0, e.getTime() - s.getTime());
+        const hrs = Math.floor(diff / 3600000);
+        const mins = Math.floor((diff % 3600000) / 60000);
+        return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+    };
+
+    const printTATLog = () => {
+        const win = window.open('', '', 'width=800,height=600');
+        win?.document.write(`
+            <html><head><title>TAT Log</title><style>
+                body { font-family: sans-serif; padding: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                th, td { border: 1px solid #ddd; padding: 10px; text-align: left; font-size: 12px; }
+                th { background-color: #f0f0f0; }
+                h2 { margin-bottom: 5px; }
+                .meta { font-size: 12px; color: #666; margin-bottom: 20px; }
+            </style></head>
+            <body>
+            <h2>Turnaround Time (TAT) Log</h2>
+            <div class="meta">Printed: ${new Date().toLocaleString()} | Total Samples: ${trackerSamples.length}</div>
+            <table>
+                <thead><tr><th>Patient</th><th>Test</th><th>Booked At</th><th>Reported At</th><th>TAT</th></tr></thead>
+                <tbody>
+                ${trackerSamples.map(s => {
+            const start = s.createdAt.toDate ? s.createdAt.toDate() : new Date(s.createdAt);
+            const end = s.reportedAt ? (s.reportedAt.toDate ? s.reportedAt.toDate() : new Date(s.reportedAt)) : null;
+            const tat = s.status === 'reported' && end ? getDuration(s.createdAt, s.reportedAt) : 'Pending';
+            return `<tr><td>${s.patientName}</td><td>${s.testName}</td><td>${start.toLocaleString()}</td><td>${end ? end.toLocaleString() : '--'}</td><td>${tat}</td></tr>`;
+        }).join('')}
+                </tbody>
+            </table>
+            <script>window.print(); window.close();</script>
+            </body></html>
+        `);
+        win?.document.close();
+    };
+    const [viewReport, setViewReport] = useState<Sample[] | null>(null);
     const [patientForm, setPatientForm] = useState({ fullName: '', phone: '', age: '', ageUnit: 'Years', gender: 'male', address: '', referralType: 'self', doctorName: '', clinicName: '', existingId: '' });
     const [cart, setCart] = useState<Test[]>([]);
     const [payment, setPayment] = useState({ method: 'cash', paidAmount: '', discount: 0, discountReason: '' });
@@ -3341,17 +4627,24 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
 
     const handlePatientSearch = async (isSilent = false) => {
         const phoneQuery = patientForm.phone.trim();
-        if (phoneQuery.length < 3) return;
+        if (phoneQuery.length < 3) {
+            if (!isSilent) alert("Please enter a valid phone number.");
+            return;
+        }
         setLoading(true);
         try {
             const snap = await db.collection('patients').where('phone', '>=', phoneQuery).limit(1).get();
             if (!snap.empty) {
                 const p = snap.docs[0].data() as Patient;
-                let ageVal = '', ageUnit = 'Years';
-                if (p.dob) { ageVal = calculateAge(p.dob).toString(); }
-                setPatientForm(prev => ({ ...prev, fullName: p.fullName, gender: p.gender as any, address: p.address || '', age: ageVal, existingId: snap.docs[0].id }));
-                if (!isSilent) alert("Patient Found: " + p.fullName);
-            } else { if (!isSilent) alert("Patient not found. Please enter details manually."); }
+                // Check if we should load
+                if (window.confirm(`Patient found: ${p.fullName} (${p.gender}, ${calculateAge(p.dob)} yrs).\n\nLoad existing patient record?`)) {
+                    let ageVal = '', ageUnit = 'Years';
+                    if (p.dob) { ageVal = calculateAge(p.dob).toString(); }
+                    setPatientForm(prev => ({ ...prev, fullName: p.fullName, gender: p.gender as any, address: p.address || '', age: ageVal, existingId: snap.docs[0].id }));
+                }
+            } else {
+                if (!isSilent) alert("Patient not found. You can register as new.");
+            }
         } catch (e) { console.error(e); if (!isSilent) alert("Error searching for patient."); } finally { setLoading(false); }
     };
 
@@ -3420,13 +4713,44 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
                 });
             });
             await batch.commit();
-            setPrintData({ invoiceId: invoiceRef.id, patientName: patientForm.fullName, patientPhone: patientForm.phone, age: patientForm.age + ' ' + patientForm.ageUnit, gender: patientForm.gender, date: new Date().toLocaleDateString(), doctor: doctorName, items: [...cart], subtotal: totalAmount, discount: payment.discount, total: finalAmount, paid: paidVal, due: dueVal, paymentMethod: payment.method });
+            setPrintData({
+                orderId: invoiceRef.id,
+                patientName: patientForm.fullName,
+                patientPhone: patientForm.phone,
+                patientAge: patientForm.age + ' ' + patientForm.ageUnit,
+                patientGender: patientForm.gender,
+                date: new Date(),
+                doctorName: doctorName,
+                items: cart.map(c => ({ testName: c.name, price: c.price, code: c.code })),
+                amount: totalAmount,
+                discount: payment.discount,
+                paidAmount: paidVal,
+                paymentMethod: payment.method
+            });
             setCart([]); setPatientForm({ fullName: '', phone: '', age: '', ageUnit: 'Years', gender: 'male', address: '', referralType: 'self', doctorName: '', clinicName: '', existingId: '' }); setPayment({ method: 'cash', paidAmount: '', discount: 0, discountReason: '' }); setSelectedDoctorId(''); setIsUrgent(false);
         } catch (e) { console.error(e); alert("Failed to book order."); } finally { setLoading(false); }
     };
 
     const selectPatient = (p: Patient) => { let ageVal = '', ageUnit = 'Years'; if (p.dob) { ageVal = calculateAge(p.dob).toString(); } setPatientForm({ fullName: p.fullName, phone: p.phone, age: ageVal, ageUnit: 'Years', gender: p.gender as any, address: p.address || '', referralType: 'self', doctorName: '', clinicName: '', existingId: p.id }); setSubView('new-order'); };
     const handleRejectSample = async (sample: Sample) => { const reason = prompt("Enter rejection reason (e.g., Hemolyzed, Wrong Tube):"); if (!reason) return; try { await db.collection('samples').doc(sample.id).update({ status: 'ordered', notes: `RECOLLECTION REQUESTED: ${reason}`, rejectedAt: firebase.firestore.Timestamp.now(), rejectedBy: 'Receptionist' }); alert("Sample flagged for recollection."); } catch (e) { console.error(e); alert("Failed to reject sample"); } };
+
+    const fetchAndShowPatientDetails = async (pid: string) => {
+        if (!pid) return;
+        try {
+            const snap = await db.collection('patients').doc(pid).get();
+            if (snap.exists) setViewPatientDetails({ id: snap.id, ...snap.data() } as Patient);
+            else alert("Patient record not found.");
+        } catch (e) { console.error(e); alert("Error fetching details"); }
+    };
+
+    const fetchAndPrintReport = async (orderId: string) => {
+        try {
+            const snap = await db.collection('samples').where('orderId', '==', orderId).where('status', '==', 'reported').get();
+            if (snap.empty) { alert("No reported samples found for this order."); return; }
+            const samples = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sample));
+            setViewReport(samples);
+        } catch (e) { console.error(e); alert("Error loading report."); }
+    };
 
     const renderNewOrder = () => (
         <div className="h-full flex flex-col md:flex-row overflow-hidden" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}>
@@ -3438,7 +4762,7 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
                         <div className="flex gap-2">
                             <div className="relative flex-1">
                                 <Phone className="w-4 h-4 absolute left-3 top-3" style={{ color: COLORS.TIFFANY_BLUE }} />
-                                <input type="tel" value={patientForm.phone} onChange={e => setPatientForm({ ...patientForm, phone: e.target.value })} onBlur={() => handlePatientSearch(true)} placeholder="Search or Enter Phone" className="w-full pl-9 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-[#ee9b00] outline-none transition-all" style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: 'transparent', color: COLORS.CITRON }} />
+                                <input type="tel" value={patientForm.phone} onChange={e => setPatientForm({ ...patientForm, phone: e.target.value })} placeholder="Search or Enter Phone" className="w-full pl-9 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-[#ee9b00] outline-none transition-all" style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: 'transparent', color: COLORS.CITRON }} />
                             </div>
                             <button onClick={() => handlePatientSearch()} className="p-2.5 rounded-lg transition-colors hover:opacity-80" style={{ backgroundColor: COLORS.PERSIAN_GREEN, color: COLORS.RICH_BLACK }}><Search className="w-4 h-4" /></button>
                         </div>
@@ -3543,7 +4867,9 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
                 </div>
                 <div className="p-5 rounded-xl shadow-sm flex items-center justify-between" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, border: `1px solid ${COLORS.PERSIAN_GREEN}30` }}>
                     <div><p className="text-xs font-bold uppercase mb-1" style={{ color: COLORS.TIFFANY_BLUE }}>Completed</p><p className="text-2xl font-bold" style={{ color: '#4ade80' }}>12</p></div>
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-green-900/30 text-green-400"><CheckCircle2 className="w-5 h-5" /></div>
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-green-900/30">
+                        <div className="bg-green-500 rounded-full p-1"><Check className="w-4 h-4 text-white font-bold" /></div>
+                    </div>
                 </div>
                 <div className="p-5 rounded-xl shadow-sm flex items-center justify-between" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, border: `1px solid ${COLORS.PERSIAN_GREEN}30` }}>
                     <div><p className="text-xs font-bold uppercase mb-1" style={{ color: COLORS.TIFFANY_BLUE }}>Revenue Today</p><p className="text-2xl font-bold" style={{ color: COLORS.CITRON }}>${stats.todaySales.toLocaleString()}</p></div>
@@ -3571,7 +4897,10 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
                 </div>
 
                 <div className="p-5 rounded-xl border shadow-sm" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
-                    <h3 className="font-bold mb-4 flex items-center gap-2" style={{ color: COLORS.CITRON }}><Activity className="w-5 h-5" style={{ color: COLORS.GAMBOGE }} /> Live Test Tracker</h3>
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><Activity className="w-5 h-5" style={{ color: COLORS.GAMBOGE }} /> Live Test Tracker</h3>
+                        <button onClick={printTATLog} className="text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-white/5 transition-colors" style={{ color: COLORS.TIFFANY_BLUE, border: `1px solid ${COLORS.PERSIAN_GREEN}30` }}><Printer className="w-3 h-3" /> Print TAT Log</button>
+                    </div>
                     <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar">
                         {trackerSamples.map(s => {
                             let statusColor = `bg-[${COLORS.RICH_BLACK}] text-[${COLORS.TIFFANY_BLUE}] border border-[#0a9396]/20`;
@@ -3592,8 +4921,8 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
 
                             if (s.status === 'ordered') { statusText = 'Pending Collection'; statusColor = `bg-gray-100/10 text-gray-300 border border-gray-500/30`; }
                             else if (s.status === 'collected') { statusText = 'In Lab / Analyzing'; statusColor = `bg-[#0a9396]/10 text-[#0a9396] border border-[#0a9396]/30`; }
-                            else if (s.status === 'reported') { statusText = 'Ready'; statusColor = `bg-green-500/10 text-green-400 border border-green-500/30`; }
-                            else if (s.status === 'rejected') { statusText = 'Rejected'; statusColor = `bg-red-500/10 text-red-400 border border-red-500/30`; }
+                            else if (s.status === 'reported') { statusText = 'Ready'; statusColor = `bg-green-600 text-white border border-green-700 font-bold`; }
+                            else if (s.status === 'rejected') { statusText = 'Rejected'; statusColor = `bg-red-600 text-white border border-red-700 font-bold`; }
 
                             return (
                                 <div key={s.id} className="p-3 rounded-lg transition-colors border-b last:border-0 group/row" style={{ borderColor: `${COLORS.PERSIAN_GREEN}20`, backgroundColor: 'transparent' }}>
@@ -3620,12 +4949,27 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
                 <div className="p-5 rounded-xl border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
                     <h3 className="font-bold mb-2 flex items-center gap-2" style={{ color: COLORS.CITRON }}><Bell className="w-4 h-4" style={{ color: COLORS.GAMBOGE }} /> Notifications</h3>
                     <div className="space-y-3">
-                        {notifications.length > 0 ? notifications.map((n, idx) => (
-                            <div key={n.id || idx} className={`flex gap-2 items-start text-sm p-2 rounded border ${n.type === 'alert' ? 'bg-red-900/10 text-red-200 border-red-500/20' : ''}`} style={n.type !== 'alert' ? { backgroundColor: `${COLORS.RICH_BLACK}`, color: COLORS.TIFFANY_BLUE, borderColor: `${COLORS.PERSIAN_GREEN}20` } : {}}>
-                                {n.type === 'alert' ? <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-red-400" /> : <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" style={{ color: COLORS.PERSIAN_GREEN }} />}
-                                <span className="leading-snug">{n.text}</span>
-                            </div>
-                        )) : (<p className="text-xs italic opacity-50" style={{ color: COLORS.TIFFANY_BLUE }}>No new notifications.</p>)}
+                        {notifications.length > 0 ? notifications.map((n, idx) => {
+                            let notifClass = "";
+                            let iconColor = "";
+                            if (n.type === 'alert') {
+                                notifClass = "bg-red-600 text-white border-red-700";
+                                iconColor = "text-white";
+                            } else if (n.type === 'warning' || n.type === 'info') {
+                                notifClass = "bg-amber-400 text-slate-900 border-amber-500";
+                                iconColor = "text-slate-900";
+                            } else {
+                                notifClass = "bg-slate-700 text-slate-200 border-slate-600";
+                                iconColor = "text-blue-400";
+                            }
+
+                            return (
+                                <div key={n.id || idx} className={`flex gap-3 items-center text-sm p-3 rounded-lg border shadow-sm ${notifClass}`}>
+                                    {n.type === 'alert' ? <AlertTriangle className={`w-5 h-5 shrink-0 ${iconColor}`} /> : <CheckCircle2 className={`w-5 h-5 shrink-0 ${iconColor}`} />}
+                                    <span className="leading-snug font-medium">{n.text}</span>
+                                </div>
+                            )
+                        }) : (<p className="text-xs italic opacity-50" style={{ color: COLORS.TIFFANY_BLUE }}>No new notifications.</p>)}
                     </div>
                 </div>
             </div>
@@ -3691,16 +5035,16 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
 
     const renderCriticalReports = () => (
         <div className="h-full flex flex-col p-6" style={{ backgroundColor: `${COLORS.RICH_BLACK}` }}>
-            <div className="flex justify-between items-center mb-6">
-                <div><h3 className="text-2xl font-bold flex items-center gap-2" style={{ color: '#f87171' }}><AlertTriangle className="w-8 h-8" /> Critical Results Management</h3><p style={{ color: '#fca5a5' }}>Urgent action required for these patients.</p></div>
-                <button onClick={downloadCriticalLog} className="border px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors hover:bg-red-900/20" style={{ backgroundColor: 'transparent', borderColor: '#ef4444', color: '#fca5a5' }}><Download className="w-4 h-4" /> Download Log</button>
+            <div className="flex justify-between items-center mb-6 bg-red-950/50 p-4 rounded-xl border border-red-900/50">
+                <div><h3 className="text-2xl font-bold flex items-center gap-2 text-red-50"><AlertTriangle className="w-8 h-8 text-red-500" /> Critical Results Management</h3><p className="text-red-200 font-medium">Urgent action required for these patients.</p></div>
+                <button onClick={downloadCriticalLog} className="border border-red-500 text-red-200 px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors hover:bg-red-900/40"><Download className="w-4 h-4" /> Download Log</button>
             </div>
-            <div className="flex-1 overflow-y-auto rounded-xl shadow border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: '#ef4444' }}>
+            <div className="flex-1 overflow-y-auto rounded-xl shadow border border-red-900" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}>
                 <table className="w-full text-left">
-                    <thead className="border-b" style={{ backgroundColor: '#7f1d1d20', borderColor: '#ef444440' }}>
-                        <tr><th className="p-4" style={{ color: '#fca5a5' }}>Date/Time</th><th className="p-4" style={{ color: '#fca5a5' }}>Patient</th><th className="p-4" style={{ color: '#fca5a5' }}>Contact</th><th className="p-4" style={{ color: '#fca5a5' }}>Test</th><th className="p-4" style={{ color: '#fca5a5' }}>Status</th><th className="p-4 text-right" style={{ color: '#fca5a5' }}>Action</th></tr>
+                    <thead className="bg-red-900/40 border-b border-red-900">
+                        <tr><th className="p-4 text-red-100">Date/Time</th><th className="p-4 text-red-100">Patient</th><th className="p-4 text-red-100">Contact</th><th className="p-4 text-red-100">Test</th><th className="p-4 text-red-100">Status</th><th className="p-4 text-right text-red-100">Action</th></tr>
                     </thead>
-                    <tbody className="divide-y" style={{ divideColor: '#ef444420' }}>
+                    <tbody className="divide-y divide-red-900/20">
                         {criticalSamples.map(s => {
                             const hasDoctor = s.doctorName && s.doctorName !== 'Self';
                             const contactName = hasDoctor ? `Dr. ${s.doctorName}` : 'Patient';
@@ -3716,10 +5060,10 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
                                     </td>
                                     <td className="p-4" style={{ color: COLORS.CITRON }}>{s.testName} {s.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1 rounded uppercase font-bold ml-1">URGENT</span>}</td>
                                     <td className="p-4">
-                                        {s.criticalReported ? <span className="bg-green-900/30 text-green-400 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 w-fit"><CheckCircle2 className="w-3 h-3" /> Reported</span> : <span className="bg-red-900/30 text-red-400 px-2 py-1 rounded text-xs font-bold animate-pulse">PENDING ACTION</span>}
+                                        {s.criticalReported ? <span className="bg-green-600 text-white px-2 py-1 rounded text-xs font-bold flex items-center gap-1 w-fit"><CheckCircle2 className="w-3 h-3" /> Reported</span> : <span className="bg-red-600 text-white border-2 border-white px-2 py-1 rounded text-xs font-bold animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.6)]">PENDING ACTION</span>}
                                     </td>
                                     <td className="p-4 text-right">
-                                        {!s.criticalReported && <button onClick={() => handleMarkCriticalReported(s)} className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 shadow-sm shadow-red-900/50">Mark Reported</button>}
+                                        {!s.criticalReported && <button onClick={() => handleMarkCriticalReported(s)} className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-500 hover:scale-105 transition-all shadow-lg shadow-red-900/50">Mark Reported</button>}
                                         {s.criticalReported && <span className="text-xs italic opacity-50" style={{ color: COLORS.TIFFANY_BLUE }}>By {s.criticalReportedBy}</span>}
                                     </td>
                                 </tr>
@@ -3732,13 +5076,23 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
         </div>
     );
 
+    const handleModuleBack = () => {
+        if (subView !== 'dashboard') {
+            setSubView('dashboard');
+        } else if (onBack) {
+            onBack();
+        }
+    };
+
     return (
         <div className="h-full flex flex-col" style={{ backgroundColor: COLORS.RICH_BLACK }}>
             {printData && <PrintInvoiceModal data={printData} onClose={() => setPrintData(null)} />}
+
             {viewReport && <PrintReportModal data={viewReport} onClose={() => setViewReport(null)} />}
+            {viewPatientDetails && <PatientDetailsModal patient={viewPatientDetails} onClose={() => setViewPatientDetails(null)} />}
             <div className="flex items-center justify-between px-6 py-3 border-b shadow-sm z-30 shrink-0" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
                 <div className="flex items-center gap-4">
-                    {onBack && <button onClick={onBack} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.CITRON }}><ArrowRight className="w-5 h-5 rotate-180" /></button>}
+                    {onBack && <button onClick={handleModuleBack} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.CITRON }}><ArrowRight className="w-5 h-5 rotate-180" /></button>}
                     <h2 className="text-2xl font-bold" style={{ color: COLORS.CITRON }}>Reception Desk</h2>
                     <div className="hidden md:flex p-1 rounded-lg" style={{ backgroundColor: COLORS.RICH_BLACK }}>
                         {['dashboard', 'new-order', 'history', 'reports', 'critical-reports', 'search-patients'].map(v => (
@@ -3753,65 +5107,106 @@ const ReceptionModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
             <div className="flex-1 min-h-0 overflow-hidden relative">
                 {subView === 'dashboard' && <div className="overflow-y-auto h-full pb-20 custom-scrollbar">{renderDashboard()}</div>}
                 {subView === 'new-order' && renderNewOrder()}
-                {subView === 'history' && <div className="overflow-y-auto h-full p-6 pb-20 custom-scrollbar"><OrderHistoryTable /></div>}
+                {subView === 'history' && <div className="overflow-y-auto h-full p-6 pb-20 custom-scrollbar"><OrderHistoryTable onViewDetails={fetchAndShowPatientDetails} onPrintReport={fetchAndPrintReport} /></div>}
                 {subView === 'reports' && <div className="overflow-y-auto h-full p-6 pb-20 custom-scrollbar"><ReceptionReportsTable onPrint={(s) => setViewReport(s)} /></div>}
                 {subView === 'critical-reports' && renderCriticalReports()}
-                {subView === 'search-patients' && <PatientSearchPanel onSelect={selectPatient} />}
+                {subView === 'search-patients' && <PatientSearchPanel onSelect={selectPatient} onViewDetails={(p) => setViewPatientDetails(p)} />}
             </div>
         </div>
     );
 };
 
-const PhlebotomyModule: React.FC = () => {
-    const [queue, setQueue] = useState<Sample[]>([]);
+const PhlebotomyModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
+    const [samples, setSamples] = useState<Sample[]>([]);
     const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
-    const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+    const [expandedVisitId, setExpandedVisitId] = useState<string | null>(null);
+    const [selectedVisit, setSelectedVisit] = useState<{ orderId: string; tests: Sample[] } | null>(null);
     const [consumedItems, setConsumedItems] = useState<{ itemId: string, itemName: string, quantity: number }[]>([]);
 
     useEffect(() => {
-        const unsubQueue = db.collection('samples').where('status', '==', 'ordered').onSnapshot(s => setQueue(s.docs.map(d => ({ id: d.id, ...d.data() } as Sample))));
+        const unsubQueue = db.collection('samples').where('status', '==', 'ordered').onSnapshot(s => setSamples(s.docs.map(d => ({ id: d.id, ...d.data() } as Sample))));
         const unsubInv = db.collection('inventory_items').where('status', '!=', 'out_of_stock').onSnapshot(s => setInventoryItems(s.docs.map(d => ({ id: d.id, ...d.data() } as InventoryItem))));
         return () => { unsubQueue(); unsubInv(); };
     }, []);
 
-    const openCollectionModal = async (s: Sample) => {
-        setSelectedSample(s); setConsumedItems([]);
-        try { const testSnap = await db.collection('tests').doc(s.testId).get(); if (testSnap.exists) { const testData = testSnap.data() as Test; if (testData.inventoryRequirements) { setConsumedItems(testData.inventoryRequirements.map(req => ({ itemId: req.itemId, itemName: req.itemName, quantity: req.quantity }))); } } } catch (e) { console.error("Error fetching test defaults", e); }
+    // Group samples by patient visit (orderId)
+    const patientVisits = useMemo(() => {
+        const visitMap: Record<string, { orderId: string; patientName: string; patientPhone?: string; tests: Sample[]; isUrgent: boolean; createdAt: any }> = {};
+        samples.forEach(s => {
+            const key = s.orderId || s.patientId;
+            if (!visitMap[key]) {
+                visitMap[key] = {
+                    orderId: s.orderId,
+                    patientName: s.patientName,
+                    patientPhone: s.patientPhone,
+                    tests: [],
+                    isUrgent: s.isUrgent || false,
+                    createdAt: s.createdAt
+                };
+            }
+            visitMap[key].tests.push(s);
+        });
+        return Object.values(visitMap).sort((a, b) => {
+            if (a.isUrgent && !b.isUrgent) return -1;
+            if (!a.isUrgent && b.isUrgent) return 1;
+            const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date();
+            const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date();
+            return dateA.getTime() - dateB.getTime();
+        });
+    }, [samples]);
+
+    const openCollectionModal = async (visit: typeof patientVisits[0]) => {
+        setSelectedVisit({ orderId: visit.orderId, tests: visit.tests });
+
+        // Aggregate inventory requirements from all tests
+        const allReqs: { itemId: string, itemName: string, quantity: number }[] = [];
+        for (const sample of visit.tests) {
+            try {
+                const testSnap = await db.collection('tests').doc(sample.testId).get();
+                if (testSnap.exists) {
+                    const testData = testSnap.data() as Test;
+                    if (testData.inventoryRequirements) {
+                        testData.inventoryRequirements.forEach(req => {
+                            const existing = allReqs.find(r => r.itemId === req.itemId);
+                            if (existing) {
+                                existing.quantity += req.quantity;
+                            } else {
+                                allReqs.push({ ...req });
+                            }
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error("Error fetching test requirements", e);
+            }
+        }
+        setConsumedItems(allReqs);
     };
 
     const handleConfirmCollection = async () => {
-        if (!selectedSample) return;
-
-        console.log('[PHLEBOTOMY] Starting collection confirmation');
-        console.log('[PHLEBOTOMY] Sample:', selectedSample.testName);
-        console.log('[PHLEBOTOMY] Consumed items count:', consumedItems.length);
-        console.log('[PHLEBOTOMY] Consumed items:', consumedItems);
-
-        if (consumedItems.length === 0) {
-            console.warn('[PHLEBOTOMY] WARNING: No inventory items to deduct!');
-            alert('Warning: No inventory items selected. Collection will proceed without deducting inventory.');
-        }
+        if (!selectedVisit) return;
 
         try {
             const batch = db.batch();
-            const label = generateSampleLabel(selectedSample.orderId, Math.floor(Math.random() * 100));
-            const sampleRef = db.collection('samples').doc(selectedSample.id);
-            batch.update(sampleRef, {
-                status: 'collected',
-                collectedAt: firebase.firestore.Timestamp.now(),
-                sampleLabelId: label,
-                collectorName: auth.currentUser?.email || 'Phlebotomist',
-                notes: selectedSample.notes?.includes("RECOLLECTION") ? `Recollected after rejection. ${selectedSample.notes}` : ''
+
+            // Mark all tests in visit as collected
+            selectedVisit.tests.forEach((sample, idx) => {
+                const label = generateSampleLabel(selectedVisit.orderId, idx + 1);
+                const sampleRef = db.collection('samples').doc(sample.id);
+                batch.update(sampleRef, {
+                    status: 'collected',
+                    collectedAt: firebase.firestore.Timestamp.now(),
+                    sampleLabelId: label,
+                    collectorName: auth.currentUser?.email || 'Phlebotomist',
+                    collectorId: auth.currentUser?.uid
+                });
             });
 
-            // Deduct inventory items
-            let deductedCount = 0;
+            // Deduct inventory items (aggregated)
             consumedItems.forEach(item => {
-                console.log('[PHLEBOTOMY] Processing item:', item.itemName, 'qty:', item.quantity);
                 if (item.quantity > 0) {
                     const invItem = inventoryItems.find(i => i.id === item.itemId);
                     if (invItem) {
-                        console.log('[PHLEBOTOMY] Found inventory item:', invItem.name, 'current qty:', invItem.quantity);
                         const itemRef = db.collection('inventory_items').doc(item.itemId);
                         batch.update(itemRef, {
                             quantity: firebase.firestore.FieldValue.increment(-item.quantity)
@@ -3826,60 +5221,180 @@ const PhlebotomyModule: React.FC = () => {
                             quantity: -item.quantity,
                             cost,
                             performedBy: auth.currentUser?.uid || 'sys',
-                            reason: `Sample Collection: ${selectedSample.testName}`,
-                            relatedSampleId: selectedSample.id,
-                            relatedTestId: selectedSample.testId,
+                            reason: `Batch Sample Collection: Order ${selectedVisit.orderId}`,
+                            relatedSampleId: selectedVisit.tests.map(t => t.id).join(','),
                             timestamp: firebase.firestore.Timestamp.now()
                         });
-                        deductedCount++;
-                        console.log('[PHLEBOTOMY] Added deduction to batch for:', item.itemName);
-                    } else {
-                        console.error('[PHLEBOTOMY] ERROR: Inventory item not found in database:', item.itemId);
                     }
-                } else {
-                    console.warn('[PHLEBOTOMY] Skipping item with zero quantity:', item.itemName);
                 }
             });
 
-            console.log('[PHLEBOTOMY] Total items to deduct:', deductedCount);
-            console.log('[PHLEBOTOMY] Committing batch...');
             await batch.commit();
-            console.log('[PHLEBOTOMY] ✅ Batch committed successfully!');
-            console.log('[PHLEBOTOMY] Collection completed, inventory updated');
-            setSelectedSample(null);
+            setSelectedVisit(null);
+            setConsumedItems([]);
         } catch (e) {
-            console.error('[PHLEBOTOMY] ❌ Collection failed:', e);
-            console.error('[PHLEBOTOMY] Error details:', e instanceof Error ? e.message : String(e));
-            alert('Failed to confirm collection. Error: ' + (e instanceof Error ? e.message : String(e)));
+            console.error('Collection failed:', e);
+            alert('Failed to confirm collection: ' + (e instanceof Error ? e.message : String(e)));
         }
     };
 
     const renderCollectionModal = () => {
-        if (!selectedSample) return null;
+        if (!selectedVisit) return null;
+        const visit = patientVisits.find(v => v.orderId === selectedVisit.orderId);
+        if (!visit) return null;
+
         return (
-            <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                <div className="rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]" style={{ backgroundColor: COLORS.RICH_BLACK, border: `1px solid ${COLORS.PERSIAN_GREEN}40` }}>
-                    <div className="p-5 border-b flex justify-between items-center" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><h3 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>Confirm Collection</h3><button onClick={() => setSelectedSample(null)}><X className="w-5 h-5 opacity-70 hover:opacity-100" style={{ color: COLORS.TIFFANY_BLUE }} /></button></div>
+            <div className="fixed inset-0 bg-black/80 z-[1001] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedVisit(null)}>
+                <div className="rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]" style={{ backgroundColor: COLORS.RICH_BLACK, border: `1px solid ${COLORS.PERSIAN_GREEN}40` }} onClick={e => e.stopPropagation()}>
+                    <div className="p-5 border-b flex justify-between items-center shrink-0" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                        <h3 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>Batch Collection - {visit.tests.length} Test(s)</h3>
+                        <button onClick={() => setSelectedVisit(null)}><X className="w-5 h-5 opacity-70 hover:opacity-100" style={{ color: COLORS.TIFFANY_BLUE }} /></button>
+                    </div>
+
                     <div className="p-6 overflow-y-auto space-y-6">
-                        <div className="p-3 rounded border" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><p className="font-bold" style={{ color: COLORS.CITRON }}>{selectedSample.patientName}</p><p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>{selectedSample.testName} ({selectedSample.sampleType})</p></div>
+                        {/* Patient Info */}
+                        <div className="p-4 rounded-lg border" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                            <p className="font-bold text-lg" style={{ color: COLORS.CITRON }}>{visit.patientName}</p>
+                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>Order ID: {visit.orderId}</p>
+                            {visit.isUrgent && <span className="inline-block mt-2 bg-red-600 text-white text-xs px-2 py-1 rounded font-bold uppercase">URGENT</span>}
+                        </div>
+
+                        {/* Tests List */}
                         <div>
-                            <h4 className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: COLORS.CITRON }}><Package className="w-4 h-4" /> Consumables Used</h4>
-                            <div className="space-y-2 mb-4">{consumedItems.map((item, idx) => (<div key={idx} className="flex items-center gap-2 p-2 rounded border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}20` }}><span className="flex-1 text-sm font-medium" style={{ color: COLORS.TIFFANY_BLUE }}>{item.itemName}</span><input type="number" className="w-16 p-1 border rounded text-right text-sm outline-none focus:ring-1 focus:ring-[#ee9b00]" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }} value={item.quantity} onChange={(e) => { const newItems = [...consumedItems]; newItems[idx].quantity = parseFloat(e.target.value); setConsumedItems(newItems); }} /><button onClick={() => { const newItems = [...consumedItems]; newItems.splice(idx, 1); setConsumedItems(newItems); }} className="text-red-400 hover:bg-red-900/20 p-1 rounded"><Trash2 className="w-4 h-4" /></button></div>))}{consumedItems.length === 0 && <p className="text-xs italic" style={{ color: COLORS.TIFFANY_BLUE }}>No items selected.</p>}</div>
-                            <div className="flex gap-2"><select id="phleb-inv-select" className="flex-1 p-2 border rounded text-sm outline-none" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><option value="">Select Item...</option>{inventoryItems.map(i => <option key={i.id} value={i.id}>{i.name} ({i.quantity})</option>)}</select><button onClick={() => { const sel = document.getElementById('phleb-inv-select') as HTMLSelectElement; const item = inventoryItems.find(i => i.id === sel.value); if (item) { setConsumedItems([...consumedItems, { itemId: item.id, itemName: item.name, quantity: 1 }]); } }} className="px-3 py-2 rounded text-sm font-bold shadow-md hover:opacity-90 transition-opacity" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, color: COLORS.CITRON }}>Add</button></div>
+                            <h4 className="font-bold text-sm mb-3 flex items-center gap-2" style={{ color: COLORS.CITRON }}>
+                                <TestTube className="w-4 h-4" /> Tests to Collect
+                            </h4>
+                            <div className="space-y-2">
+                                {visit.tests.map((test, idx) => (
+                                    <div key={test.id} className="flex items-center gap-3 p-3 rounded border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
+                                        <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}30`, color: COLORS.CITRON }}>{idx + 1}</span>
+                                        <div className="flex-1">
+                                            <p className="font-medium text-sm" style={{ color: COLORS.CITRON }}>{test.testName}</p>
+                                            <p className="text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>{test.sampleType}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Consumables */}
+                        <div>
+                            <h4 className="font-bold text-sm mb-2 flex items-center gap-2" style={{ color: COLORS.CITRON }}>
+                                <Package className="w-4 h-4" /> Total Consumables
+                            </h4>
+                            <div className="space-y-2 mb-4">
+                                {consumedItems.map((item, idx) => (
+                                    <div key={idx} className="flex items-center gap-2 p-2 rounded border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
+                                        <span className="flex-1 text-sm font-medium" style={{ color: COLORS.TIFFANY_BLUE }}>{item.itemName}</span>
+                                        <input type="number" className="w-20 p-1 border rounded text-right text-sm outline-none focus:ring-1 focus:ring-[#ee9b00]" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }} value={item.quantity} onChange={(e) => { const newItems = [...consumedItems]; newItems[idx].quantity = parseFloat(e.target.value) || 0; setConsumedItems(newItems); }} />
+                                        <button onClick={() => setConsumedItems(consumedItems.filter((_, i) => i !== idx))} className="text-red-400 hover:bg-red-900/20 p-1 rounded"><Trash2 className="w-4 h-4" /></button>
+                                    </div>
+                                ))}
+                                {consumedItems.length === 0 && <p className="text-xs italic" style={{ color: COLORS.TIFFANY_BLUE }}>No consumables required.</p>}
+                            </div>
+                            <div className="flex gap-2">
+                                <select id="phleb-inv-select" className="flex-1 p-2 border rounded text-sm outline-none" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                                    <option value="">Add Item...</option>
+                                    {inventoryItems.map(i => <option key={i.id} value={i.id}>{i.name} (Stock: {i.quantity})</option>)}
+                                </select>
+                                <button onClick={() => { const sel = document.getElementById('phleb-inv-select') as HTMLSelectElement; const item = inventoryItems.find(i => i.id === sel.value); if (item) { setConsumedItems([...consumedItems, { itemId: item.id, itemName: item.name, quantity: 1 }]); sel.value = ''; } }} className="px-3 py-2 rounded text-sm font-bold shadow-md hover:opacity-90 transition-opacity" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, color: COLORS.CITRON }}>Add</button>
+                            </div>
                         </div>
                     </div>
-                    <div className="p-5 border-t flex justify-end gap-3" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><button onClick={() => setSelectedSample(null)} className="px-4 py-2 font-bold text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>Cancel</button><button onClick={handleConfirmCollection} className="text-white px-6 py-2 rounded-lg font-bold shadow-lg flex items-center gap-2 hover:opacity-90 transition-opacity" style={{ backgroundColor: COLORS.GAMBOGE, color: COLORS.RICH_BLACK }}><QrCode className="w-4 h-4" /> Confirm & Print Label</button></div>
+
+                    <div className="p-5 border-t flex justify-end gap-3 shrink-0" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                        <button onClick={() => setSelectedVisit(null)} className="px-4 py-2 font-bold text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>Cancel</button>
+                        <button onClick={handleConfirmCollection} className="text-white px-6 py-2 rounded-lg font-bold shadow-lg flex items-center gap-2 hover:opacity-90 transition-opacity" style={{ backgroundColor: COLORS.GAMBOGE, color: COLORS.RICH_BLACK }}>
+                            <QrCode className="w-4 h-4" /> Collect All ({visit.tests.length})
+                        </button>
+                    </div>
                 </div>
             </div>
         );
     };
-    return (<div className="p-6 space-y-6 h-full flex flex-col">{renderCollectionModal()}<div className="flex justify-between items-center"><h2 className="text-2xl font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><Syringe className="w-6 h-6" style={{ color: COLORS.GAMBOGE }} /> Sample Collection</h2><div className="px-3 py-1 rounded-full text-xs font-bold" style={{ backgroundColor: `${COLORS.GAMBOGE}20`, color: COLORS.GAMBOGE }}>{queue.length} Pending</div></div><div className="flex-1 overflow-y-auto custom-scrollbar"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{queue.map(s => (<div key={s.id} className="p-5 rounded-xl border shadow-sm hover:shadow-md transition-all group hover:-translate-y-1" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><div className="flex justify-between items-start mb-4"><div className="w-10 h-10 rounded-full flex items-center justify-center font-bold transition-colors" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>{s.patientName.substring(0, 2).toUpperCase()}</div><span className="text-[10px] px-2 py-1 rounded font-bold uppercase tracking-wider" style={{ backgroundColor: `${COLORS.RICH_BLACK}50`, color: COLORS.TIFFANY_BLUE }}>{s.sampleType}</span></div><h4 className="font-bold truncate" title={s.patientName} style={{ color: COLORS.CITRON }}>{s.patientName}</h4><p className="text-sm mb-4 truncate" title={s.testName} style={{ color: COLORS.TIFFANY_BLUE }}>{s.testName} {s.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ml-2 animate-pulse">Urgent</span>}</p>{s.notes && s.notes.includes("RECOLLECTION") && (<div className="mb-4 p-2 rounded text-xs font-bold border" style={{ backgroundColor: '#7f1d1d20', color: '#fca5a5', borderColor: '#ef444440' }}>⚠️ {s.notes}</div>)}<div className="pt-4 border-t" style={{ borderColor: `${COLORS.PERSIAN_GREEN}20` }}><button onClick={() => openCollectionModal(s)} className="w-full py-2.5 rounded-lg font-bold text-sm transition-colors shadow-sm flex items-center justify-center gap-2 hover:opacity-90" style={{ backgroundColor: COLORS.PERSIAN_GREEN, color: COLORS.RICH_BLACK }}><CheckCircle2 className="w-4 h-4" /> Start Collection</button></div></div>))}{queue.length === 0 && <div className="col-span-full flex flex-col items-center justify-center h-64 rounded-xl border border-dashed" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30`, color: COLORS.TIFFANY_BLUE }}><CheckCircle2 className="w-12 h-12 mb-2 opacity-20" /><p>All samples collected.</p></div>}</div></div></div>);
+
+    return (
+        <div className="p-6 space-y-6 h-full flex flex-col">
+            {renderCollectionModal()}
+
+            <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                    {onBack && <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors"><ArrowLeft className="w-5 h-5" style={{ color: COLORS.GAMBOGE }} /></button>}
+                    <h2 className="text-2xl font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><Syringe className="w-6 h-6" style={{ color: COLORS.GAMBOGE }} /> Sample Collection</h2>
+                </div>
+                <div className="px-3 py-1 rounded-full text-xs font-bold" style={{ backgroundColor: `${COLORS.GAMBOGE}20`, color: COLORS.GAMBOGE }}>{patientVisits.length} Patient(s) | {samples.length} Sample(s)</div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="space-y-3">
+                    {patientVisits.map(visit => (
+                        <div key={visit.orderId} className="rounded-xl border shadow-sm transition-all overflow-hidden" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                            {/* Visit Header - Clickable */}
+                            <div className="p-4 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => setExpandedVisitId(expandedVisitId === visit.orderId ? null : visit.orderId)}>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4 flex-1">
+                                        <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>
+                                            {visit.patientName.substring(0, 2).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>{visit.patientName}</h4>
+                                                {visit.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase animate-pulse">URGENT</span>}
+                                            </div>
+                                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                                {visit.tests.length} Test{visit.tests.length > 1 ? 's' : ''} • Order #{visit.orderId.slice(0, 8)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button onClick={(e) => { e.stopPropagation(); openCollectionModal(visit); }} className="px-4 py-2 rounded-lg font-bold text-sm transition-colors shadow-sm flex items-center gap-2 hover:opacity-90" style={{ backgroundColor: COLORS.PERSIAN_GREEN, color: COLORS.RICH_BLACK }}>
+                                            <CheckCircle2 className="w-4 h-4" /> Collect
+                                        </button>
+                                        <ChevronRight className={`w-5 h-5 transition-transform ${expandedVisitId === visit.orderId ? 'rotate-90' : ''}`} style={{ color: COLORS.TIFFANY_BLUE }} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Expanded Test List */}
+                            {expandedVisitId === visit.orderId && (
+                                <div className="border-t px-4 py-3 space-y-2" style={{ backgroundColor: `${COLORS.RICH_BLACK}50`, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
+                                    {visit.tests.map((test, idx) => (
+                                        <div key={test.id} className="flex items-center gap-3 p-2 rounded" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}>
+                                            <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>{idx + 1}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-medium text-sm truncate" style={{ color: COLORS.CITRON }}>{test.testName}</p>
+                                                <p className="text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>{test.sampleType}</p>
+                                            </div>
+                                            {test.notes && test.notes.includes("RECOLLECTION") && (
+                                                <span className="text-[10px] px-2 py-1 rounded font-bold border flex-shrink-0" style={{ backgroundColor: '#7f1d1d20', color: '#fca5a5', borderColor: '#ef444440' }}>
+                                                    REDO
+                                                </span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+
+                    {patientVisits.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-64 rounded-xl border border-dashed" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30`, color: COLORS.TIFFANY_BLUE }}>
+                            <CheckCircle2 className="w-12 h-12 mb-2 opacity-20" />
+                            <p>All samples collected. Great work!</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 };
 
-const LabTechModule: React.FC = () => {
+const LabTechModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
     const [samples, setSamples] = useState<Sample[]>([]);
     const [testsMap, setTestsMap] = useState<Record<string, Test>>({});
-    const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+    const [expandedVisitId, setExpandedVisitId] = useState<string | null>(null);
+    const [selectedVisit, setSelectedVisit] = useState<{ orderId: string; tests: Sample[] } | null>(null);
+    const [currentTestIndex, setCurrentTestIndex] = useState(0);
     const [resultsForm, setResultsForm] = useState<Record<string, { value: string, flag: 'N' | 'L' | 'H' | 'CL' | 'CH', unit: string }>>({});
     const { showToast, showAlert, showConfirm } = useDialog();
 
@@ -3889,14 +5404,40 @@ const LabTechModule: React.FC = () => {
         return () => { unsubSamples(); unsubTests(); };
     }, []);
 
+    // Group samples by patient visit
+    const patientVisits = useMemo(() => {
+        const visitMap: Record<string, { orderId: string; patientName: string; patientAge: number; patientGender: string; tests: Sample[]; isUrgent: boolean; createdAt: any; completedCount: number }> = {};
+        samples.forEach(s => {
+            const key = s.orderId || s.patientId;
+            if (!visitMap[key]) {
+                visitMap[key] = {
+                    orderId: s.orderId,
+                    patientName: s.patientName,
+                    patientAge: s.patientAge,
+                    patientGender: s.patientGender,
+                    tests: [],
+                    isUrgent: s.isUrgent || false,
+                    createdAt: s.createdAt,
+                    completedCount: 0
+                };
+            }
+            visitMap[key].tests.push(s);
+            if (s.status === 'analyzing' || s.status === 'review') {
+                visitMap[key].completedCount++;
+            }
+        });
+        return Object.values(visitMap).sort((a, b) => {
+            if (a.isUrgent && !b.isUrgent) return -1;
+            if (!a.isUrgent && b.isUrgent) return 1;
+            return a.createdAt?.toDate().getTime() - b.createdAt?.toDate().getTime();
+        });
+    }, [samples]);
+
     const getFlag = (value: number, ranges: ReferenceRange[], gender: string, age: number): 'N' | 'L' | 'H' | 'CL' | 'CH' => {
-        // Find most specific range: Age > Gender > General
         let range = ranges.find(r => r.type === 'age' && age >= (r.ageMin || 0) && age <= (r.ageMax || 150));
         if (!range) range = ranges.find(r => r.type === 'gender' && r.gender === gender);
         if (!range) range = ranges.find(r => r.type === 'general');
-
         if (!range) return 'N';
-
         if (range.criticalMin !== undefined && value <= range.criticalMin) return 'CL';
         if (range.criticalMax !== undefined && value >= range.criticalMax) return 'CH';
         if (range.min !== undefined && value < range.min) return 'L';
@@ -3904,15 +5445,18 @@ const LabTechModule: React.FC = () => {
         return 'N';
     };
 
-    const openResultEntry = (s: Sample) => {
-        setSelectedSample(s);
-        // Initialize form with existing results or empty structure
-        const initialForm: Record<string, any> = {};
-        const testDef = testsMap[s.testId];
+    const openBatchResultsEntry = (visit: typeof patientVisits[0]) => {
+        setSelectedVisit({ orderId: visit.orderId, tests: visit.tests });
+        setCurrentTestIndex(0);
+        loadTestResults(visit.tests[0]);
+    };
 
-        if (s.results) {
-            setResultsForm(s.results as any);
+    const loadTestResults = (sample: Sample) => {
+        const testDef = testsMap[sample.testId];
+        if (sample.results) {
+            setResultsForm(sample.results as any);
         } else if (testDef && testDef.parameters) {
+            const initialForm: Record<string, any> = {};
             testDef.parameters.forEach(p => {
                 initialForm[p.name] = { value: '', flag: 'N', unit: p.unit };
             });
@@ -3923,12 +5467,12 @@ const LabTechModule: React.FC = () => {
     };
 
     const handleResultChange = (paramName: string, value: string, param: TestParameter) => {
+        if (!selectedVisit) return;
+        const currentSample = selectedVisit.tests[currentTestIndex];
         let flag: 'N' | 'L' | 'H' | 'CL' | 'CH' = 'N';
         if (param.type === 'numeric' && value !== '') {
             const numVal = parseFloat(value);
-            // Assuming simplified patient demographics for now passed in sample
-            // ideally we'd look up detailed Age/Gender if not on sample, but sample has patientAge/Gender
-            flag = getFlag(numVal, param.refRanges, selectedSample?.patientGender || 'male', selectedSample?.patientAge || 30);
+            flag = getFlag(numVal, param.refRanges, currentSample.patientGender || 'male', currentSample.patientAge || 30);
         }
         setResultsForm(prev => ({
             ...prev,
@@ -3936,35 +5480,28 @@ const LabTechModule: React.FC = () => {
         }));
     };
 
-    const handleSaveResults = async () => {
-        if (!selectedSample) return;
+    const saveCurrentTest = async () => {
+        if (!selectedVisit) return false;
+        const currentSample = selectedVisit.tests[currentTestIndex];
 
-        // Validation Checks
+        // Validation
         const criticals: string[] = [];
         const unsafe: string[] = [];
-        const results = resultsForm;
+        const testDef = testsMap[currentSample.testId];
 
-        // Re-evaluate flags and safe ranges
-        const testDef = testsMap[selectedSample.testId];
         if (testDef && testDef.parameters) {
             testDef.parameters.forEach(param => {
-                const res = results[param.name];
+                const res = resultsForm[param.name];
                 if (res && res.value && param.type === 'numeric') {
                     if (res.flag === 'CL' || res.flag === 'CH') {
                         criticals.push(`${param.name} (${res.value} ${param.unit})`);
                     }
-
-                    // Safe Range Check
                     const numVal = parseFloat(res.value);
-                    // Find applicable range
-                    let range = param.refRanges.find(r => r.type === 'age' && (selectedSample.patientAge || 30) >= (r.ageMin || 0) && (selectedSample.patientAge || 30) <= (r.ageMax || 150));
-                    if (!range) range = param.refRanges.find(r => r.type === 'gender' && r.gender === (selectedSample.patientGender || 'male'));
+                    let range = param.refRanges.find(r => r.type === 'age' && currentSample.patientAge >= (r.ageMin || 0) && currentSample.patientAge <= (r.ageMax || 150));
+                    if (!range) range = param.refRanges.find(r => r.type === 'gender' && r.gender === currentSample.patientGender);
                     if (!range) range = param.refRanges.find(r => r.type === 'general');
-
-                    if (range) {
-                        if ((range.safeMin !== undefined && numVal < range.safeMin) || (range.safeMax !== undefined && numVal > range.safeMax)) {
-                            unsafe.push(`${param.name} (Value: ${numVal}, Safe: ${range.safeMin}-${range.safeMax})`);
-                        }
+                    if (range && ((range.safeMin !== undefined && numVal < range.safeMin) || (range.safeMax !== undefined && numVal > range.safeMax))) {
+                        unsafe.push(`${param.name} (Value: ${numVal}, Safe: ${range.safeMin}-${range.safeMax})`);
                     }
                 }
             });
@@ -3972,107 +5509,147 @@ const LabTechModule: React.FC = () => {
 
         if (unsafe.length > 0) {
             const confirmUnsafe = await showConfirm(
-                `The following results are outside the SAFE RANGE (Panic Values): \n${unsafe.join('\n')}\n\nDo you want to proceed with these values?`,
-                { title: 'Safe Range Violation', confirmText: 'Confirm & Save', type: 'danger' }
+                `Safe Range Violation detected:\n${unsafe.join('\n')}\n\nProceed?`,
+                { title: 'Warning', confirmText: 'Confirm & Save', type: 'danger' }
             );
-            if (!confirmUnsafe) return;
+            if (!confirmUnsafe) return false;
         }
 
         if (criticals.length > 0) {
-            showAlert('warning', `CRITICAL VALUES DETECTED:\n${criticals.join('\n')}\n\nPlease notify the responsible doctor immediately.`, 'Critical Result Alert');
-
-            // Create persistent notification for Reception/Pathology
-            try {
-                db.collection('notifications').add({
-                    text: `CRITICAL RESULT: ${selectedSample.patientName} - ${selectedSample.testName}. Values: ${criticals.join(', ')}`,
-                    type: 'alert',
-                    targetRole: 'reception', // or 'all'
-                    createdAt: firebase.firestore.Timestamp.now(),
-                    read: false,
-                    linkSampleId: selectedSample.id
-                });
-            } catch (e) { console.error("Failed to send notification", e); }
+            showAlert('warning', `CRITICAL VALUES:\n${criticals.join('\n')}\n\nNotify doctor immediately.`, 'Critical Alert');
         }
 
         try {
-            await db.collection('samples').doc(selectedSample.id).update({
-                status: 'review',
+            await db.collection('samples').doc(currentSample.id).update({
+                status: 'analyzing',
                 results: resultsForm,
                 analyzedAt: firebase.firestore.Timestamp.now(),
-                isCritical: criticals.length > 0, // NEW: Flag for easy querying
-                // Add automated notes for criticals if needed, or just rely on flags
-                notes: criticals.length > 0 ? (selectedSample.notes ? selectedSample.notes + '\n' : '') + `Critical Values: ${criticals.join(', ')}` : selectedSample.notes
+                isCritical: criticals.length > 0
             });
-            // Removed redundant inventory deduction (handled in Phlebotomy)
-            setSelectedSample(null);
-            showToast("Results submitted for review", "success");
+            return true;
         } catch (e) {
-            console.error('Save results failed:', e);
-            alert("Error saving results: " + (e instanceof Error ? e.message : String(e)));
+            console.error('Save failed:', e);
+            showAlert('error', 'Failed to save results');
+            return false;
         }
     };
 
-    const renderResultForm = () => {
-        if (!selectedSample) return null;
-        const testDef = testsMap[selectedSample.testId];
-        if (!testDef) return <div className="p-4 text-center" style={{ color: COLORS.CITRON }}><p>Test definition not found.</p><button onClick={() => setSelectedSample(null)}>Close</button></div>;
+    const navigateTest = async (direction: 'prev' | 'next') => {
+        if (!selectedVisit) return;
+
+        // Save current test before navigating
+        const saved = await saveCurrentTest();
+        if (!saved) return;
+
+        const newIndex = direction === 'next' ? currentTestIndex + 1 : currentTestIndex - 1;
+        if (newIndex >= 0 && newIndex < selectedVisit.tests.length) {
+            setCurrentTestIndex(newIndex);
+            loadTestResults(selectedVisit.tests[newIndex]);
+        }
+    };
+
+    const submitAllForReview = async () => {
+        if (!selectedVisit) return;
+
+        // Save current test first
+        const saved = await saveCurrentTest();
+        if (!saved) return;
+
+        const confirmed = await showConfirm(
+            `Submit all ${selectedVisit.tests.length} tests for pathologist review?`,
+            { title: 'Submit Batch', confirmText: 'Submit All' }
+        );
+        if (!confirmed) return;
+
+        try {
+            const batch = db.batch();
+            selectedVisit.tests.forEach(test => {
+                const ref = db.collection('samples').doc(test.id);
+                batch.update(ref, {
+                    status: 'review',
+                    submittedForReviewAt: firebase.firestore.Timestamp.now()
+                });
+            });
+            await batch.commit();
+            showToast('success', `All ${selectedVisit.tests.length} tests submitted for review!`);
+            setSelectedVisit(null);
+        } catch (e) {
+            console.error('Batch submit failed:', e);
+            showAlert('error', 'Failed to submit tests');
+        }
+    };
+
+    const renderBatchResultsModal = () => {
+        if (!selectedVisit) return null;
+        const currentSample = selectedVisit.tests[currentTestIndex];
+        const testDef = testsMap[currentSample.testId];
+        if (!testDef) return null;
+
+        const progress = ((currentTestIndex + 1) / selectedVisit.tests.length) * 100;
 
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style={{ backgroundColor: '#00000080' }}>
-                <div className="rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, border: `1px solid ${COLORS.PERSIAN_GREEN}40` }}>
-                    <div className="p-5 border-b flex justify-between items-center" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40` }}><div style={{ color: COLORS.CITRON }}><h3 className="font-bold text-lg">Enter Results</h3><p className="text-xs font-bold uppercase" style={{ color: COLORS.TIFFANY_BLUE }}>{selectedSample.testName}</p></div><button onClick={() => setSelectedSample(null)} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.TIFFANY_BLUE }}><X className="w-5 h-5" /></button></div>
-                    <div className="p-6 overflow-y-auto flex-1 space-y-6">
-                        <div className="p-3 rounded-lg border mb-4" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><p className="text-xs font-bold" style={{ color: COLORS.CITRON }}>Sample ID: <span className="font-mono">{selectedSample.sampleLabelId}</span></p><p className="text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>Patient: {selectedSample.patientName} ({selectedSample.patientAge} / {selectedSample.patientGender})</p></div>
-                        {(!testDef.parameters || testDef.parameters.length === 0) ? (
-                            <div className="text-center py-4">
-                                <p className="mb-2" style={{ color: COLORS.TIFFANY_BLUE }}>No specific parameters defined.</p>
-                                <textarea className="w-full border rounded p-2 outline-none focus:ring-1 focus:ring-[#00b4d8]" style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.CITRON }} placeholder="Enter general result text..." value={resultsForm['main']?.value || ''} onChange={e => setResultsForm({ ...resultsForm, 'main': { value: e.target.value, flag: 'N', unit: '' } })} />
-                            </div>
-                        ) : (
-                            testDef.parameters.map(param => {
+            <div className="fixed inset-0 bg-black/80 z-[1001] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedVisit(null)}>
+                <div className="rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[95vh]" style={{ backgroundColor: COLORS.RICH_BLACK, border: `1px solid ${COLORS.PERSIAN_GREEN}40` }} onClick={e => e.stopPropagation()}>
+                    {/* Header */}
+                    <div className="p-5 border-b flex justify-between items-center shrink-0" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                        <div>
+                            <h3 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>Batch Results Entry</h3>
+                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>{selectedVisit.tests[0].patientName} • Test {currentTestIndex + 1} of {selectedVisit.tests.length}</p>
+                        </div>
+                        <button onClick={() => setSelectedVisit(null)}><X className="w-5 h-5" style={{ color: COLORS.TIFFANY_BLUE }} /></button>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="px-5 py-3 border-b" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-bold" style={{ color: COLORS.TIFFANY_BLUE }}>Progress</span>
+                            <span className="text-xs font-bold" style={{ color: COLORS.GAMBOGE }}>{Math.round(progress)}%</span>
+                        </div>
+                        <div className="w-full h-2 rounded-full overflow-hidden" style={{ backgroundColor: `${COLORS.RICH_BLACK}` }}>
+                            <div className="h-full transition-all duration-300" style={{ width: `${progress}%`, backgroundColor: COLORS.GAMBOGE }}></div>
+                        </div>
+                        <div className="flex gap-1 mt-3">
+                            {selectedVisit.tests.map((test, idx) => (
+                                <div key={test.id} className={`flex-1 h-1 rounded ${idx === currentTestIndex ? 'ring-2 ring-offset-1' : ''}`} style={{
+                                    backgroundColor: test.status === 'analyzing' || test.status === 'review' ? COLORS.SUCCESS : idx < currentTestIndex ? COLORS.GAMBOGE : `${COLORS.PERSIAN_GREEN}30`,
+                                    ringColor: COLORS.GAMBOGE
+                                }} title={test.testName}></div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Current Test */}
+                    <div className="p-6 overflow-y-auto flex-1">
+                        <div className="mb-6 p-4 rounded-lg border" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                            <h4 className="font-bold text-xl mb-1" style={{ color: COLORS.CITRON }}>{currentSample.testName}</h4>
+                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>Sample ID: {currentSample.sampleLabelId} • Type: {currentSample.sampleType}</p>
+                        </div>
+
+                        {/* Parameters */}
+                        <div className="space-y-4">
+                            {testDef.parameters && testDef.parameters.map(param => {
                                 const current = resultsForm[param.name] || { value: '', flag: 'N', unit: param.unit };
-                                const flagColor = { 'N': 'opacity-50', 'L': 'text-amber-400', 'H': 'text-amber-400', 'CL': 'text-red-400', 'CH': 'text-red-400' }[current.flag];
-                                const flagLabel = { 'N': 'Normal', 'L': 'Low', 'H': 'High', 'CL': 'Critical Low', 'CH': 'Critical High' }[current.flag];
+                                const flagColors = { N: 'text-slate-500', L: 'text-yellow-500', H: 'text-yellow-500', CL: 'text-red-600', CH: 'text-red-600' };
+                                const flagLabels = { N: '', L: 'LOW', H: 'HIGH', CL: '⚠ CRITICAL LOW', CH: '⚠ CRITICAL HIGH' };
+                                const flagColor = flagColors[current.flag as keyof typeof flagColors];
+                                const flagLabel = flagLabels[current.flag as keyof typeof flagLabels];
 
                                 return (
-                                    <div key={param.id} className="p-3 rounded-lg border" style={{ backgroundColor: `${COLORS.RICH_BLACK}50`, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
-                                        <div className="flex justify-between mb-1">
-                                            <label className="text-sm font-bold" style={{ color: COLORS.CITRON }}>{param.name}</label>
-                                            <span className="text-xs font-mono" style={{ color: COLORS.TIFFANY_BLUE }}>{param.unit}</span>
-                                        </div>
-                                        {param.type === 'dropdown' && param.options ? (
-                                            <select
-                                                className="w-full p-2 border rounded-lg outline-none"
-                                                style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }}
-                                                value={current.value}
-                                                onChange={e => handleResultChange(param.name, e.target.value, param)}
-                                            >
-                                                <option value="">Select...</option>
-                                                {param.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                                            </select>
-                                        ) : (
+                                    <div key={param.name} className="p-3 rounded-lg border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
+                                        <label className="block text-sm font-bold mb-2" style={{ color: COLORS.CITRON }}>{param.name}</label>
+                                        {param.type === 'numeric' && (
                                             <div className="relative">
-                                                <input
-                                                    type={param.type === 'numeric' ? 'number' : 'text'}
-                                                    className={`w-full p-2 border rounded-lg outline-none focus:ring-1 focus:ring-[#00b4d8]`}
-                                                    style={{
-                                                        backgroundColor: current.flag.startsWith('C') ? '#7f1d1d40' : current.flag !== 'N' ? '#78350f40' : COLORS.RICH_BLACK,
-                                                        color: COLORS.CITRON,
-                                                        borderColor: current.flag.startsWith('C') ? '#ef4444' : current.flag !== 'N' ? '#f59e0b' : `${COLORS.PERSIAN_GREEN}40`
-                                                    }}
-                                                    placeholder={`Enter ${param.name}`}
-                                                    value={current.value}
-                                                    onChange={e => handleResultChange(param.name, e.target.value, param)}
-                                                />
-                                                {param.type === 'numeric' && current.value && (
-                                                    <span className={`absolute right-3 top-2.5 text-xs font-bold ${flagColor}`} style={current.flag === 'N' ? { color: COLORS.TIFFANY_BLUE } : {}}>{flagLabel}</span>
-                                                )}
+                                                <input type="number" step="any" className="w-full p-2 pr-24 border rounded-lg outline-none focus:ring-2 focus:ring-[#ee9b00]" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }} value={current.value} onChange={e => handleResultChange(param.name, e.target.value, param)} />
+                                                {current.value && <span className={`absolute right-3 top-2.5 text-xs font-bold ${flagColor}`}>{flagLabel}</span>}
                                             </div>
                                         )}
+                                        {param.type === 'text' && (
+                                            <input type="text" className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-[#ee9b00]" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON, borderColor: `${COLORS.PERSIAN_GREEN}40` }} value={current.value} onChange={e => handleResultChange(param.name, e.target.value, param)} />
+                                        )}
                                         {param.type === 'numeric' && (
-                                            <div className="mt-1 flex gap-2 text-[10px] overflow-x-auto custom-scrollbar" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                            <div className="mt-1 flex gap-2 text-[10px]" style={{ color: COLORS.TIFFANY_BLUE }}>
                                                 {param.refRanges.map((r, idx) => (
-                                                    <span key={idx} className="whitespace-nowrap border px-1 rounded" style={{ borderColor: `${COLORS.PERSIAN_GREEN}30`, backgroundColor: `${COLORS.RICH_BLACK}80` }}>
+                                                    <span key={idx} className="whitespace-nowrap border px-1 rounded" style={{ borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
                                                         {r.type}: {r.min}-{r.max}
                                                     </span>
                                                 ))}
@@ -4080,127 +5657,483 @@ const LabTechModule: React.FC = () => {
                                         )}
                                     </div>
                                 );
-                            })
-                        )}
+                            })}
+                        </div>
                     </div>
-                    <div className="p-5 border-t flex justify-end gap-3" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
-                        <button onClick={() => setSelectedSample(null)} className="px-4 py-2 font-bold text-sm hover:opacity-80" style={{ color: COLORS.TIFFANY_BLUE }}>Cancel</button>
-                        <button onClick={handleSaveResults} className="px-6 py-2 text-white rounded-lg font-bold text-sm hover:opacity-90 shadow-lg transition-opacity" style={{ backgroundColor: COLORS.GAMBOGE, color: COLORS.RICH_BLACK }}>Save & Submit</button>
+
+                    {/* Footer */}
+                    <div className="p-5 border-t flex justify-between items-center shrink-0" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                        <button onClick={() => navigateTest('prev')} disabled={currentTestIndex === 0} className="px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 disabled:opacity-30 hover:opacity-80" style={{ color: COLORS.TIFFANY_BLUE }}>
+                            <ArrowLeft className="w-4 h-4" /> Previous
+                        </button>
+                        <div className="flex gap-3">
+                            {currentTestIndex < selectedVisit.tests.length - 1 ? (
+                                <button onClick={() => navigateTest('next')} className="px-6 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:opacity-90 shadow-lg" style={{ backgroundColor: COLORS.GAMBOGE, color: COLORS.RICH_BLACK }}>
+                                    Save & Next <ArrowRight className="w-4 h-4" />
+                                </button>
+                            ) : (
+                                <button onClick={submitAllForReview} className="px-6 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:opacity-90 shadow-lg" style={{ backgroundColor: COLORS.SUCCESS, color: 'white' }}>
+                                    Submit All for Review <CheckCircle2 className="w-4 h-4" />
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
         );
-    }
-    return (<div className="p-6 space-y-6 h-full flex flex-col">{renderResultForm()}<h2 className="text-2xl font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><Microscope className="w-6 h-6" style={{ color: COLORS.GAMBOGE }} /> Lab Processing</h2><div className="flex-1 rounded-xl border shadow-sm overflow-hidden flex flex-col" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><div className="overflow-y-auto custom-scrollbar"><table className="w-full text-left text-sm"><thead className="border-b sticky top-0 z-10" style={{ backgroundColor: `${COLORS.RICH_BLACK}90`, borderColor: `${COLORS.PERSIAN_GREEN}40`, backdropFilter: 'blur(4px)' }}><tr><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Sample ID</th><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Test</th><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Patient</th><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Status</th><th className="p-4 text-right" style={{ color: COLORS.TIFFANY_BLUE }}>Action</th></tr></thead><tbody className="divide-y" style={{ divideColor: `${COLORS.PERSIAN_GREEN}20` }}>{samples.map(s => (<tr key={s.id} className="hover:bg-white/5 transition-colors"><td className="p-4 font-mono font-bold" style={{ color: COLORS.CITRON }}>{s.sampleLabelId || '---'}</td><td className="p-4 font-bold" style={{ color: COLORS.CITRON }}>{s.testName} {s.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ml-2 animate-pulse">Urgent</span>}</td><td className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>{s.patientName}</td><td className="p-4"><span className="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.PERSIAN_GREEN }}>{s.status}</span></td><td className="p-4 text-right"><button onClick={() => openResultEntry(s)} className="px-3 py-1.5 rounded-lg text-xs font-bold hover:opacity-80 transition-opacity" style={{ backgroundColor: COLORS.PERSIAN_GREEN, color: COLORS.RICH_BLACK }}>Enter Results</button></td></tr>))}{samples.length === 0 && <tr><td colSpan={5} className="p-8 text-center italic opacity-60" style={{ color: COLORS.TIFFANY_BLUE }}>No samples to process.</td></tr>}</tbody></table></div></div></div>);
+    };
+
+    return (
+        <div className="p-6 space-y-6 h-full flex flex-col">
+            {renderBatchResultsModal()}
+
+            <div className="flex items-center gap-2">
+                {onBack && <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors"><ArrowLeft className="w-5 h-5" style={{ color: COLORS.GAMBOGE }} /></button>}
+                <h2 className="text-2xl font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><Microscope className="w-6 h-6" style={{ color: COLORS.GAMBOGE }} /> Lab Processing</h2>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="space-y-3">
+                    {patientVisits.map(visit => (
+                        <div key={visit.orderId} className="rounded-xl border shadow-sm transition-all overflow-hidden" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                            <div className="p-4 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => setExpandedVisitId(expandedVisitId === visit.orderId ? null : visit.orderId)}>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4 flex-1">
+                                        <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>
+                                            {visit.patientName.substring(0, 2).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>{visit.patientName}</h4>
+                                                {visit.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase animate-pulse">URGENT</span>}
+                                            </div>
+                                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                                {visit.tests.length} Test{visit.tests.length > 1 ? 's' : ''} • {visit.completedCount}/{visit.tests.length} Analyzed • Order #{visit.orderId.slice(0, 8)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button onClick={(e) => { e.stopPropagation(); openBatchResultsEntry(visit); }} className="px-4 py-2 rounded-lg font-bold text-sm transition-colors shadow-sm flex items-center gap-2 hover:opacity-90" style={{ backgroundColor: COLORS.GAMBOGE, color: COLORS.RICH_BLACK }}>
+                                            <Microscope className="w-4 h-4" /> Enter Results
+                                        </button>
+                                        <ChevronRight className={`w-5 h-5 transition-transform ${expandedVisitId === visit.orderId ? 'rotate-90' : ''}`} style={{ color: COLORS.TIFFANY_BLUE }} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {expandedVisitId === visit.orderId && (
+                                <div className="border-t px-4 py-3 space-y-2" style={{ backgroundColor: `${COLORS.RICH_BLACK}50`, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
+                                    {visit.tests.map((test, idx) => (
+                                        <div key={test.id} className="flex items-center gap-3 p-2 rounded" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}>
+                                            <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>{idx + 1}</span>
+                                            <div className="flex-1">
+                                                <p className="font-medium text-sm" style={{ color: COLORS.CITRON }}>{test.testName}</p>
+                                                <p className="text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>{test.sampleType} • {test.sampleLabelId}</p>
+                                            </div>
+                                            {(test.status === 'analyzing' || test.status === 'review') ? (
+                                                <span className="text-xs px-2 py-1 rounded font-bold" style={{ backgroundColor: `${COLORS.SUCCESS}20`, color: COLORS.SUCCESS }}>Done</span>
+                                            ) : (
+                                                <span className="text-xs px-2 py-1 rounded font-bold" style={{ backgroundColor: `${COLORS.GAMBOGE}20`, color: COLORS.GAMBOGE }}>Pending</span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+
+                    {patientVisits.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-64 rounded-xl border border-dashed" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30`, color: COLORS.TIFFANY_BLUE }}>
+                            <Microscope className="w-12 h-12 mb-2 opacity-20" />
+                            <p>No samples to process.</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 };
 
-const PathologistModule: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'review' | 'upcoming'>('review');
-    const [reviews, setReviews] = useState<Sample[]>([]);
-    const [upcoming, setUpcoming] = useState<Sample[]>([]);
-    const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
-    const [loadingAction, setLoadingAction] = useState(false);
-    const [remarks, setRemarks] = useState('');
+
+const PathologistModule: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
+    const [samples, setSamples] = useState<Sample[]>([]);
+    const [expandedVisitId, setExpandedVisitId] = useState<string | null>(null);
+    const [selectedVisit, setSelectedVisit] = useState<{ orderId: string; tests: Sample[] } | null>(null);
     const [conclusion, setConclusion] = useState('');
+    const [remarks, setRemarks] = useState('');
     const [isGeneratingAI, setIsGeneratingAI] = useState(false);
-    const [previewData, setPreviewData] = useState<Sample | null>(null);
+    const [loadingAction, setLoadingAction] = useState(false);
+    const [previewData, setPreviewData] = useState<Sample[] | null>(null);
+    const { showAlert, showConfirm, showToast } = useDialog();
 
     useEffect(() => {
-        const unsubReview = db.collection('samples').where('status', '==', 'review').onSnapshot(snap => setReviews(snap.docs.map(d => ({ id: d.id, ...d.data() } as Sample))));
-        const unsubUpcoming = db.collection('samples').where('status', 'in', ['ordered', 'collected', 'analyzing']).onSnapshot(snap => setUpcoming(snap.docs.map(d => ({ id: d.id, ...d.data() } as Sample))));
-        return () => { unsubReview(); unsubUpcoming(); };
+        const unsubReview = db.collection('samples').where('status', '==', 'review').onSnapshot(snap => setSamples(snap.docs.map(d => ({ id: d.id, ...d.data() } as Sample))));
+        return () => unsubReview();
     }, []);
 
-    const openReviewModal = (s: Sample) => { setSelectedSample(s); setRemarks(s.pathologistRemarks || ''); setConclusion(s.conclusion || ''); };
-    const closeReviewModal = () => { setSelectedSample(null); setRemarks(''); setConclusion(''); };
+    // Group samples by patient visit
+    const patientVisits = useMemo(() => {
+        const visitMap: Record<string, { orderId: string; patientName: string; patientAge: number; patientGender: string; tests: Sample[]; isUrgent: boolean; hasCritical: boolean; createdAt: any }> = {};
+        samples.forEach(s => {
+            const key = s.orderId || s.patientId;
+            if (!visitMap[key]) {
+                visitMap[key] = {
+                    orderId: s.orderId,
+                    patientName: s.patientName,
+                    patientAge: s.patientAge,
+                    patientGender: s.patientGender,
+                    tests: [],
+                    isUrgent: s.isUrgent || false,
+                    hasCritical: false,
+                    createdAt: s.createdAt
+                };
+            }
+            visitMap[key].tests.push(s);
+            if (s.isCritical || (s.results && Object.values(s.results).some((r: any) => r.flag === 'CL' || r.flag === 'CH'))) {
+                visitMap[key].hasCritical = true;
+            }
+        });
+        return Object.values(visitMap).sort((a, b) => {
+            if (a.hasCritical && !b.hasCritical) return -1;
+            if (!a.hasCritical && b.hasCritical) return 1;
+            if (a.isUrgent && !b.isUrgent) return -1;
+            if (!a.isUrgent && b.isUrgent) return 1;
+            return a.createdAt?.toDate().getTime() - b.createdAt?.toDate().getTime();
+        });
+    }, [samples]);
 
-    const handleApprove = async () => { if (!selectedSample) return; setLoadingAction(true); try { await db.collection('samples').doc(selectedSample.id).update({ status: 'reported', verifiedBy: auth.currentUser?.email || 'Pathologist', reportedAt: firebase.firestore.Timestamp.now(), pathologistRemarks: remarks, conclusion: conclusion }); closeReviewModal(); } catch (e) { console.error(e); } finally { setLoadingAction(false); } };
-    const handleReject = async () => { if (!selectedSample) return; if (!window.confirm("Reject this result and send back to Technician?")) return; setLoadingAction(true); try { await db.collection('samples').doc(selectedSample.id).update({ status: 'analyzing', notes: 'Result rejected by Pathologist. Please re-run.' }); closeReviewModal(); } catch (e) { console.error(e); } finally { setLoadingAction(false); } };
+    const openReviewModal = (visit: typeof patientVisits[0]) => {
+        setSelectedVisit({ orderId: visit.orderId, tests: visit.tests });
+        setConclusion('');
+        setRemarks('');
+    };
 
     const generateAIConclusion = async () => {
-        if (!selectedSample) return;
+        if (!selectedVisit) return;
         setIsGeneratingAI(true);
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-            // Format results for AI context
-            const formattedResults = Object.entries(selectedSample.results || {}).map(([key, val]: [string, any]) => {
-                const v = typeof val === 'object' ? val.value : val;
-                const u = typeof val === 'object' ? val.unit : '';
-                const f = typeof val === 'object' ? val.flag : 'N';
-                return `${key}: ${v} ${u} (Flag: ${f})`;
-            }).join(', ');
+            // Aggregate all test results for AI context
+            const allResults = selectedVisit.tests.map(test => {
+                const formattedResults = Object.entries(test.results || {}).map(([key, val]: [string, any]) => {
+                    const v = typeof val === 'object' ? val.value : val;
+                    const u = typeof val === 'object' ? val.unit : '';
+                    const f = typeof val === 'object' ? val.flag : 'N';
+                    return `${key}: ${v} ${u} (${f})`;
+                }).join(', ');
+                return `${test.testName}: ${formattedResults}`;
+            }).join(' | ');
 
-            const prompt = `Act as a clinical pathologist. Analyze the following lab results for test "${selectedSample.testName}". Results: ${formattedResults}. Patient Age: ${selectedSample.patientAge}, Gender: ${selectedSample.patientGender}. Provide a professional, concise medical conclusion (max 3 sentences) and a separate short remark if necessary. Format: JSON with keys "conclusion" and "remark".`;
+            const prompt = `Act as a clinical pathologist. Review ALL test results for patient visit. Tests: ${allResults}. Patient: ${selectedVisit.tests[0].patientAge}y/${selectedVisit.tests[0].patientGender}. Provide ONE professional, concise medical conclusion for the ENTIRE visit (max 4 sentences). Format: JSON with key "conclusion".`;
 
-            const result = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
-            const text = (result as any).response.text(); // Cast to any to avoid type definition mismatches in SDK versions
-            try { const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim(); const data = JSON.parse(jsonStr); if (data.conclusion) setConclusion(data.conclusion); if (data.remark) setRemarks(data.remark); } catch (parseError) { setConclusion(text); }
-        } catch (error) { console.error("AI Error:", error); alert("AI Generation failed. Please try again or type manually."); } finally { setIsGeneratingAI(false); }
+            const result = await ai.models.generateContent({ model: 'gemini-2.0-flash-exp', contents: prompt });
+            const text = (result as any).response.text();
+            try {
+                const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+                const data = JSON.parse(jsonStr);
+                if (data.conclusion) setConclusion(data.conclusion);
+            } catch {
+                setConclusion(text);
+            }
+        } catch (error) {
+            console.error("AI Error:", error);
+            showAlert('error', 'AI generation failed. Please type manually.');
+        } finally {
+            setIsGeneratingAI(false);
+        }
     };
 
-    const handlePreview = () => { if (!selectedSample) return; setPreviewData({ ...selectedSample, pathologistRemarks: remarks, conclusion: conclusion }); };
+    const handleApproveAll = async () => {
+        if (!selectedVisit) return;
 
-    return (
-        <div className="p-6 space-y-6 h-full flex flex-col">
-            {previewData && <PrintReportModal data={previewData} onClose={() => setPreviewData(null)} />}
-            <div className="flex justify-between items-center"><h2 className="text-2xl font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><FileCheck className="w-6 h-6" style={{ color: COLORS.GAMBOGE }} /> Pathologist Verification</h2><div className="p-1 rounded-lg flex gap-1" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}><button onClick={() => setActiveTab('review')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-all ${activeTab === 'review' ? 'shadow-sm' : 'hover:opacity-80'}`} style={{ backgroundColor: activeTab === 'review' ? COLORS.GAMBOGE : 'transparent', color: activeTab === 'review' ? COLORS.RICH_BLACK : COLORS.TIFFANY_BLUE }}>Pending Review ({reviews.length})</button><button onClick={() => setActiveTab('upcoming')} className={`px-4 py-1.5 text-sm font-bold rounded-md transition-all ${activeTab === 'upcoming' ? 'shadow-sm' : 'hover:opacity-80'}`} style={{ backgroundColor: activeTab === 'upcoming' ? COLORS.GAMBOGE : 'transparent', color: activeTab === 'upcoming' ? COLORS.RICH_BLACK : COLORS.TIFFANY_BLUE }}>Upcoming Work ({upcoming.length})</button></div></div>
-            <div className="flex-1 rounded-xl border shadow-sm overflow-hidden flex flex-col" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}><div className="overflow-y-auto custom-scrollbar"><table className="w-full text-left text-sm"><thead className="border-b sticky top-0 z-10" style={{ backgroundColor: `${COLORS.RICH_BLACK}90`, borderColor: `${COLORS.PERSIAN_GREEN}40`, backdropFilter: 'blur(4px)' }}><tr><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Sample ID</th><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Patient</th><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Test</th><th className="p-4" style={{ color: COLORS.TIFFANY_BLUE }}>Status</th><th className="p-4 text-right" style={{ color: COLORS.TIFFANY_BLUE }}>Action</th></tr></thead><tbody className="divide-y" style={{ divideColor: `${COLORS.PERSIAN_GREEN}20` }}>{(activeTab === 'review' ? reviews : upcoming).map(s => {
-                const isCritical = s.isCritical || (s.results && Object.values(s.results).some((r: any) => r.flag === 'CL' || r.flag === 'CH'));
-                return (
-                    <tr key={s.id} className={`group transition-colors ${isCritical ? 'border-l-4 border-l-red-500' : 'hover:bg-white/5'}`} style={isCritical ? { backgroundColor: '#7f1d1d40' } : {}}>
-                        <td className="p-4 font-mono text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>{s.sampleLabelId || s.id.slice(0, 6)}</td>
-                        <td className="p-4 font-bold" style={{ color: COLORS.CITRON }}>{s.patientName}</td>
-                        <td className="p-4">
-                            <div className="font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}>
-                                {s.testName}
-                                {isCritical && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase animate-pulse shadow-sm shadow-red-900/50">Critical</span>}
-                                {s.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase shadow-sm shadow-red-900/50">Urgent</span>}
-                            </div>
-                            <p className="text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>{s.sampleType}</p>
-                        </td>
-                        <td className="p-4"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase`} style={s.status === 'review' ? { backgroundColor: '#f59e0b30', color: '#fbbf24' } : { backgroundColor: `${COLORS.RICH_BLACK}50`, color: COLORS.TIFFANY_BLUE }}>{s.status === 'review' ? 'Waiting Approval' : s.status}</span></td>
-                        <td className="p-4 text-right">{activeTab === 'review' && (<button onClick={() => openReviewModal(s)} className="px-3 py-1.5 rounded-lg text-xs font-bold hover:opacity-80 transition-opacity" style={{ backgroundColor: COLORS.PERSIAN_GREEN, color: COLORS.RICH_BLACK }}>Review & Approve</button>)}</td>
-                    </tr>
-                );
+        const confirmed = await showConfirm(
+            `Approve ALL ${selectedVisit.tests.length} tests for ${selectedVisit.tests[0].patientName}?\n\nThis will publish the combined report.`,
+            { title: 'Batch Approval', confirmText: 'Approve All', type: 'primary' }
+        );
+        if (!confirmed) return;
 
-            })}
-                {(activeTab === 'review' ? reviews : upcoming).length === 0 && <tr><td colSpan={5} className="p-10 text-center opacity-60" style={{ color: COLORS.TIFFANY_BLUE }}>No samples found.</td></tr>}
-            </tbody></table></div></div>
-            {selectedSample && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style={{ backgroundColor: '#00000080' }}>
-                    <div className="rounded-xl shadow-2xl w-full max-w-4xl h-[90vh] flex flex-col overflow-hidden" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, border: `1px solid ${COLORS.PERSIAN_GREEN}40` }}>
-                        <div className="flex justify-between items-center p-6 border-b" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40` }}><div><h3 className="text-xl font-bold" style={{ color: COLORS.CITRON }}>Review Sample Result</h3><p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>{selectedSample.sampleLabelId} • {selectedSample.patientName}</p></div><button onClick={closeReviewModal} className="p-2 rounded-full hover:bg-white/10" style={{ color: COLORS.TIFFANY_BLUE }}><X className="w-5 h-5" /></button></div>
-                        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 gap-8 custom-scrollbar">
-                            <div className="space-y-6">
-                                <div className="p-4 rounded-lg border" style={{ backgroundColor: `${COLORS.RICH_BLACK}50`, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
-                                    <h4 className="font-bold mb-4 flex items-center gap-2" style={{ color: COLORS.CITRON }}><List className="w-4 h-4" /> Technical Results</h4>
-                                    <table className="w-full text-sm">
-                                        <tbody className="divide-y border-t" style={{ divideColor: `${COLORS.PERSIAN_GREEN}20`, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
-                                            {selectedSample.results && Object.entries(selectedSample.results).map(([key, val]: [string, any]) => {
+        setLoadingAction(true);
+        try {
+            const batch = db.batch();
+
+            // Mark all tests as reported with shared conclusion
+            selectedVisit.tests.forEach(test => {
+                const ref = db.collection('samples').doc(test.id);
+                batch.update(ref, {
+                    status: 'reported',
+                    reportedAt: firebase.firestore.Timestamp.now(),
+                    verifiedBy: auth.currentUser?.email || 'Pathologist',
+                    pathologistRemarks: remarks,
+                    conclusion: conclusion
+                });
+            });
+
+            // Update order status
+            if (selectedVisit.orderId) {
+                const orderRef = db.collection('orders').doc(selectedVisit.orderId);
+                batch.update(orderRef, {
+                    status: 'completed',
+                    completedAt: firebase.firestore.Timestamp.now()
+                });
+            }
+
+            await batch.commit();
+            showToast('success', `All ${selectedVisit.tests.length} tests approved and published!`);
+            setSelectedVisit(null);
+        } catch (e) {
+            console.error('Approval failed:', e);
+            showAlert('error', 'Failed to approve tests');
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleRejectAll = async () => {
+        if (!selectedVisit) return;
+
+        const reason = window.prompt('Enter rejection reason for this visit:');
+        if (!reason) return;
+
+        setLoadingAction(true);
+        try {
+            const batch = db.batch();
+            selectedVisit.tests.forEach(test => {
+                const ref = db.collection('samples').doc(test.id);
+                batch.update(ref, {
+                    status: 'analyzing',
+                    rejectedAt: firebase.firestore.Timestamp.now(),
+                    rejectedBy: auth.currentUser?.email,
+                    notes: `REJECTED BY PATHOLOGIST: ${reason}`
+                });
+            });
+            await batch.commit();
+            showToast('success', `Visit rejected. All tests sent back to lab.`);
+            setSelectedVisit(null);
+        } catch (e) {
+            console.error('Rejection failed:', e);
+            showAlert('error', 'Failed to reject tests');
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handlePreview = () => {
+        if (!selectedVisit) return;
+        // Apply conclusion to all tests for preview
+        const testsWithConclusion = selectedVisit.tests.map(t => ({
+            ...t,
+            conclusion,
+            pathologistRemarks: remarks
+        }));
+        setPreviewData(testsWithConclusion);
+    };
+
+    const renderReviewModal = () => {
+        if (!selectedVisit) return null;
+        const visit = patientVisits.find(v => v.orderId === selectedVisit.orderId);
+        if (!visit) return null;
+
+        return (
+            <div className="fixed inset-0 z-[1001] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedVisit(null)}>
+                <div className="rounded-xl shadow-2xl w-full max-w-6xl overflow-hidden flex flex-col max-h-[95vh]" style={{ backgroundColor: COLORS.RICH_BLACK, border: `1px solid ${COLORS.PERSIAN_GREEN}40` }} onClick={e => e.stopPropagation()}>
+                    {/* Header */}
+                    <div className="p-5 border-b flex justify-between items-center shrink-0" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                        <div>
+                            <h3 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>Batch Review: {visit.patientName}</h3>
+                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>{visit.tests.length} Test(s) • Order #{visit.orderId.slice(0, 8)}</p>
+                        </div>
+                        <button onClick={() => setSelectedVisit(null)}><X className="w-5 h-5" style={{ color: COLORS.TIFFANY_BLUE }} /></button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Left: All Test Results */}
+                        <div className="space-y-4">
+                            <h4 className="font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}>
+                                <List className="w-4 h-4" /> All Test Results
+                            </h4>
+
+                            {visit.tests.map((test, idx) => (
+                                <div key={test.id} className="p-4 rounded-lg border" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}30`, color: COLORS.CITRON }}>{idx + 1}</span>
+                                        <h5 className="font-bold text-sm" style={{ color: COLORS.CITRON }}>{test.testName}</h5>
+                                        {test.isCritical && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase animate-pulse">CRITICAL</span>}
+                                    </div>
+
+                                    <table className="w-full text-xs">
+                                        <tbody className="divide-y" style={{ divideColor: `${COLORS.PERSIAN_GREEN}20` }}>
+                                            {test.results && Object.entries(test.results).map(([key, val]: [string, any]) => {
                                                 const value = typeof val === 'object' ? val.value : val;
                                                 const unit = typeof val === 'object' ? val.unit : '';
                                                 const flag = typeof val === 'object' ? val.flag : 'N';
+                                                const isCritical = flag === 'CL' || flag === 'CH';
+                                                const isAbnormal = flag === 'L' || flag === 'H';
+
                                                 return (
                                                     <tr key={key}>
-                                                        <td className="py-2 font-medium" style={{ color: COLORS.TIFFANY_BLUE }}>{key}</td>
-                                                        <td className="py-2 text-right font-bold" style={{ color: COLORS.CITRON }}>
-                                                            {value} <span className="text-xs font-normal opacity-70" style={{ color: COLORS.TIFFANY_BLUE }}>{unit}</span>
-                                                            {flag !== 'N' && <span className={`ml-2 text-[10px] uppercase font-bold ${flag.startsWith('C') ? 'text-red-400' : 'text-amber-400'}`}>{flag}</span>}
+                                                        <td className="py-1 font-medium" style={{ color: COLORS.TIFFANY_BLUE }}>{key}</td>
+                                                        <td className="py-1 text-right">
+                                                            <span className={`font-bold ${isCritical ? 'text-red-500' : isAbnormal ? 'text-yellow-500' : ''}`} style={!isCritical && !isAbnormal ? { color: COLORS.CITRON } : {}}>
+                                                                {value} <span className="text-[10px] opacity-70">{unit}</span>
+                                                            </span>
+                                                            {flag !== 'N' && <span className={`ml-2 text-[9px] font-bold ${isCritical ? 'text-red-400' : 'text-yellow-400'}`}>{flag}</span>}
                                                         </td>
                                                     </tr>
                                                 );
                                             })}
                                         </tbody>
                                     </table>
+
+                                    <div className="mt-2 text-[10px] space-y-0.5" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                        <p>Sample: {test.sampleType} • {test.sampleLabelId}</p>
+                                        <p>Collected: {formatDate(test.collectedAt)}</p>
+                                    </div>
                                 </div>
-                                <div className="text-xs space-y-1" style={{ color: COLORS.TIFFANY_BLUE }}><p>Patient ID: {selectedSample.patientId}</p><p>Age/Gender: {selectedSample.patientAge}/{selectedSample.patientGender}</p><p>Collected: {formatDate(selectedSample.collectedAt)}</p></div>
+                            ))}
+                        </div>
+
+                        {/* Right: Clinical Evaluation */}
+                        <div className="space-y-4 flex flex-col">
+                            <div className="flex justify-between items-center">
+                                <h4 className="font-bold" style={{ color: COLORS.CITRON }}>Clinical Evaluation</h4>
+                                <button onClick={generateAIConclusion} disabled={isGeneratingAI} className="text-xs px-2 py-1 rounded border font-bold flex items-center gap-1 hover:opacity-80" style={{ backgroundColor: '#6d28d930', color: '#c4b5fd', borderColor: '#8b5cf640' }}>
+                                    {isGeneratingAI ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} Auto-Generate
+                                </button>
                             </div>
-                            <div className="space-y-4 flex flex-col h-full"><div className="flex justify-between items-center"><h4 className="font-bold" style={{ color: COLORS.CITRON }}>Clinical Evaluation</h4><button onClick={generateAIConclusion} disabled={isGeneratingAI} className="text-xs px-2 py-1 rounded border font-bold flex items-center gap-1 hover:opacity-80 transition-opacity" style={{ backgroundColor: '#6d28d930', color: '#c4b5fd', borderColor: '#8b5cf640' }}>{isGeneratingAI ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} Auto-Generate</button></div><div><label className="block text-xs font-bold uppercase mb-1" style={{ color: COLORS.TIFFANY_BLUE }}>Conclusion / Impression</label><textarea className="w-full p-3 border rounded-lg text-sm outline-none h-24 resize-none focus:ring-1 focus:ring-[#00b4d8]" style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.CITRON }} placeholder="Enter medical conclusion..." value={conclusion} onChange={e => setConclusion(e.target.value)} /></div><div><label className="block text-xs font-bold uppercase mb-1" style={{ color: COLORS.TIFFANY_BLUE }}>Remarks (Optional)</label><textarea className="w-full p-3 border rounded-lg text-sm outline-none h-20 resize-none focus:ring-1 focus:ring-[#00b4d8]" style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.CITRON }} placeholder="Any additional notes..." value={remarks} onChange={e => setRemarks(e.target.value)} /></div><div className="mt-auto pt-6 border-t flex gap-3 justify-end" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40` }}><button onClick={handleReject} disabled={loadingAction} className="px-4 py-2 border rounded-lg font-bold text-sm hover:bg-red-900/20 transition-colors" style={{ borderColor: '#ef4444', color: '#fca5a5' }}>Reject</button><button onClick={handlePreview} className="px-4 py-2 border rounded-lg font-bold text-sm hover:bg-white/5 flex items-center gap-2 transition-colors" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.TIFFANY_BLUE }}><Eye className="w-4 h-4" /> Preview Report</button><button onClick={handleApprove} disabled={loadingAction} className="px-6 py-2 text-white rounded-lg font-bold text-sm hover:opacity-90 shadow-lg flex items-center gap-2 transition-opacity" style={{ backgroundColor: '#16a34a', color: 'white' }}>{loadingAction ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Approve & Publish</button></div></div>
+
+                            <div className="p-4 rounded-lg border" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}10`, borderColor: `${COLORS.PERSIAN_GREEN}30` }}>
+                                <p className="text-xs font-bold mb-2" style={{ color: COLORS.TIFFANY_BLUE }}>Patient Demographics</p>
+                                <div className="text-xs space-y-1" style={{ color: COLORS.CITRON }}>
+                                    <p>Name: {visit.patientName}</p>
+                                    <p>Age/Gender: {visit.patientAge}/{visit.patientGender}</p>
+                                    <p>Tests: {visit.tests.length}</p>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase mb-2" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                    Consolidated Conclusion / Impression
+                                </label>
+                                <textarea
+                                    className="w-full p-3 border rounded-lg text-sm outline-none resize-none focus:ring-2 focus:ring-[#00b4d8]"
+                                    style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.CITRON, height: '200px' }}
+                                    placeholder="Enter overall medical conclusion for all tests..."
+                                    value={conclusion}
+                                    onChange={e => setConclusion(e.target.value)}
+                                />
+                                <p className="text-[10px] mt-1 italic" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                    This conclusion will be applied to all {visit.tests.length} tests in the combined report.
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold uppercase mb-2" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                    Remarks (Optional)
+                                </label>
+                                <textarea
+                                    className="w-full p-3 border rounded-lg text-sm outline-none h-20 resize-none focus:ring-2 focus:ring-[#00b4d8]"
+                                    style={{ backgroundColor: COLORS.RICH_BLACK, borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.CITRON }}
+                                    placeholder="Any additional clinical notes..."
+                                    value={remarks}
+                                    onChange={e => setRemarks(e.target.value)}
+                                />
+                            </div>
+
+                            <div className="mt-auto pt-4 border-t flex gap-3 justify-end" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                                <button onClick={handleRejectAll} disabled={loadingAction} className="px-4 py-2 border rounded-lg font-bold text-sm hover:bg-red-900/20 transition-colors flex items-center gap-2" style={{ borderColor: '#ef4444', color: '#fca5a5' }}>
+                                    <X className="w-4 h-4" /> Reject All
+                                </button>
+                                <button onClick={handlePreview} className="px-4 py-2 border rounded-lg font-bold text-sm hover:bg-white/5 flex items-center gap-2" style={{ borderColor: `${COLORS.PERSIAN_GREEN}40`, color: COLORS.TIFFANY_BLUE }}>
+                                    <Eye className="w-4 h-4" /> Preview Report
+                                </button>
+                                <button onClick={handleApproveAll} disabled={loadingAction} className="px-6 py-2 rounded-lg font-bold text-sm hover:opacity-90 shadow-lg flex items-center gap-2" style={{ backgroundColor: COLORS.SUCCESS, color: 'white' }}>
+                                    {loadingAction ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} Approve All ({visit.tests.length})
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
-            )}
+            </div>
+        );
+    };
+
+    return (
+        <div className="p-6 space-y-6 h-full flex flex-col">
+            {previewData && <PrintReportModal data={previewData} onClose={() => setPreviewData(null)} />}
+            {renderReviewModal()}
+
+            <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                    {onBack && <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors"><ArrowLeft className="w-5 h-5" style={{ color: COLORS.GAMBOGE }} /></button>}
+                    <h2 className="text-2xl font-bold flex items-center gap-2" style={{ color: COLORS.CITRON }}><FileCheck className="w-6 h-6" style={{ color: COLORS.GAMBOGE }} /> Pathologist Verification</h2>
+                </div>
+                <div className="px-3 py-1 rounded-full text-xs font-bold" style={{ backgroundColor: `${COLORS.GAMBOGE}20`, color: COLORS.GAMBOGE }}>
+                    {patientVisits.length} Visit(s) | {samples.length} Test(s)
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="space-y-3">
+                    {patientVisits.map(visit => (
+                        <div key={visit.orderId} className={`rounded-xl border shadow-sm transition-all overflow-hidden ${visit.hasCritical ? 'border-l-4 border-l-red-500' : ''}`} style={{ backgroundColor: visit.hasCritical ? '#7f1d1d20' : COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}40` }}>
+                            <div className="p-4 cursor-pointer hover:bg-white/5 transition-colors" onClick={() => setExpandedVisitId(expandedVisitId === visit.orderId ? null : visit.orderId)}>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4 flex-1">
+                                        <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>
+                                            {visit.patientName.substring(0, 2).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-bold text-lg" style={{ color: COLORS.CITRON }}>{visit.patientName}</h4>
+                                                {visit.hasCritical && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase animate-pulse">CRITICAL VALUES</span>}
+                                                {visit.isUrgent && <span className="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase">URGENT</span>}
+                                            </div>
+                                            <p className="text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>
+                                                {visit.tests.length} Test{visit.tests.length > 1 ? 's' : ''} Awaiting Approval • Order #{visit.orderId.slice(0, 8)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button onClick={(e) => { e.stopPropagation(); openReviewModal(visit); }} className="px-4 py-2 rounded-lg font-bold text-sm transition-colors shadow-sm flex items-center gap-2 hover:opacity-90" style={{ backgroundColor: COLORS.SUCCESS, color: 'white' }}>
+                                            <FileCheck className="w-4 h-4" /> Review & Approve
+                                        </button>
+                                        <ChevronRight className={`w-5 h-5 transition-transform ${expandedVisitId === visit.orderId ? 'rotate-90' : ''}`} style={{ color: COLORS.TIFFANY_BLUE }} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {expandedVisitId === visit.orderId && (
+                                <div className="border-t px-4 py-3 space-y-2" style={{ backgroundColor: `${COLORS.RICH_BLACK}50`, borderColor: `${COLORS.PERSIAN_GREEN}20` }}>
+                                    {visit.tests.map((test, idx) => {
+                                        const hasCriticalValues = test.results && Object.values(test.results).some((r: any) => r.flag === 'CL' || r.flag === 'CH');
+                                        return (
+                                            <div key={test.id} className="flex items-center gap-3 p-2 rounded" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}>
+                                                <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: `${COLORS.PERSIAN_GREEN}20`, color: COLORS.TIFFANY_BLUE }}>{idx + 1}</span>
+                                                <div className="flex-1">
+                                                    <p className="font-medium text-sm flex items-center gap-2" style={{ color: COLORS.CITRON }}>
+                                                        {test.testName}
+                                                        {hasCriticalValues && <span className="bg-red-600 text-white text-[9px] px-1 py-0.5 rounded font-bold">CRITICAL</span>}
+                                                    </p>
+                                                    <p className="text-xs" style={{ color: COLORS.TIFFANY_BLUE }}>{test.sampleType} • {test.sampleLabelId}</p>
+                                                </div>
+                                                <span className="text-xs px-2 py-1 rounded font-bold" style={{ backgroundColor: `${COLORS.GAMBOGE}20`, color: COLORS.GAMBOGE }}>Ready</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+
+                    {patientVisits.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-64 rounded-xl border border-dashed" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, borderColor: `${COLORS.PERSIAN_GREEN}30`, color: COLORS.TIFFANY_BLUE }}>
+                            <FileCheck className="w-12 h-12 mb-2 opacity-20" />
+                            <p>No visits pending review. Great work!</p>
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
     );
 };
@@ -4224,11 +6157,200 @@ export const useDialog = () => {
     return context;
 };
 
+// --- Protected Route Component ---
+const ProtectedRoute: React.FC<{
+    user: any;
+    role: Role | null;
+    redirectPath?: string;
+    children?: React.ReactNode;
+}> = ({ user, role, redirectPath = '/login', children }) => {
+    if (!user) {
+        return <Navigate to={redirectPath} replace />;
+    }
+    // Simple verification - more complex role checks can be done inside specific modules or wrappers
+    return children ? <>{children}</> : <Outlet />;
+};
+
+// --- Main Layout Component ---
+const MainLayout: React.FC<{
+    user: any;
+    role: Role | null;
+    onLogout: () => void;
+    isInventoryModalOpen: boolean;
+    setIsInventoryModalOpen: (open: boolean) => void;
+}> = ({ user, role, onLogout, isInventoryModalOpen, setIsInventoryModalOpen }) => {
+    return (
+        <div className="flex flex-col h-screen w-full font-sans overflow-hidden transition-colors duration-500" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON }}>
+            <InventoryRequestModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} userId={user.uid} userName={user.username || user.email || 'User'} userRole={role} />
+
+            <TopBar user={user} onLogout={onLogout} />
+
+            <main className="flex-1 h-full overflow-hidden relative flex flex-col">
+                <div className="flex-1 overflow-auto p-0 relative custom-scrollbar">
+                    <Outlet />
+                </div>
+            </main>
+        </div>
+    );
+};
+
+const DashboardHome: React.FC<{ user: any; role: Role | null; setIsInventoryModalOpen: (open: boolean) => void; }> = ({ user, role, setIsInventoryModalOpen }) => {
+    const navigate = useNavigate();
+    return (
+        <div className="p-8 h-full overflow-y-auto">
+            <div className="max-w-7xl mx-auto space-y-8">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-3xl font-bold tracking-tight" style={{ color: COLORS.TIFFANY_BLUE }}>Welcome back, <span style={{ color: COLORS.GAMBOGE }}>{user.username || 'User'}</span></h2>
+                        <p className="opacity-60 mt-1">Select a workspace to begin.</p>
+                    </div>
+                    <div className="flex gap-4">
+                        <button onClick={() => setIsInventoryModalOpen(true)} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all hover:scale-105 shadow-lg" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, color: COLORS.TIFFANY_BLUE }}>
+                            <Truck className="w-5 h-5" /> Request Stock
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    {PERMISSIONS[role!]?.map(view => {
+                        if (view.startsWith('admin_')) return null;
+                        const icons: any = { 'dashboard': LayoutDashboard, 'reception': ClipboardList, 'collection': Syringe, 'lab_tech': Microscope, 'lab_path': FileCheck, 'finance': DollarSign, 'inventory': Package };
+                        const Icon = icons[view] || CheckCircle2;
+                        const label = view.replace('_', ' ');
+
+                        return (
+                            <button
+                                key={view}
+                                onClick={() => navigate(`/${view === 'dashboard' ? '' : view}`)}
+                                className="p-6 rounded-2xl flex flex-col items-start gap-4 transition-all hover:-translate-y-1 hover:shadow-2xl group border border-transparent text-left relative overflow-hidden"
+                                style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}
+                            >
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10 blur-2xl transition-all group-hover:bg-white/10"></div>
+                                <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg" style={{ backgroundColor: COLORS.PERSIAN_GREEN }}>
+                                    <Icon className="w-8 h-8 text-white" />
+                                </div>
+                                <div>
+                                    <h3 className="text-xl font-bold capitalize" style={{ color: COLORS.CITRON }}>{label}</h3>
+                                    <p className="text-xs font-medium mt-1 opacity-60" style={{ color: COLORS.TIFFANY_BLUE }}>Access module</p>
+                                </div>
+                                <div className="mt-auto pt-4 w-full flex justify-end">
+                                    <div className="p-2 rounded-full bg-black/20 group-hover:bg-black/30 transition-colors">
+                                        <ArrowRight className="w-5 h-5 text-white/50 group-hover:text-white" />
+                                    </div>
+                                </div>
+                            </button>
+                        );
+                    })}
+
+                    {/* Admin Access Card */}
+                    {(role === 'admin' || role === 'inventory_manager') && (
+                        <button
+                            onClick={() => navigate('/admin')}
+                            className="p-6 rounded-2xl flex flex-col items-start gap-4 transition-all hover:-translate-y-1 hover:shadow-2xl group border border-transparent text-left relative overflow-hidden"
+                            style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}
+                        >
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10 blur-2xl transition-all group-hover:bg-white/10"></div>
+                            <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg" style={{ backgroundColor: COLORS.GAMBOGE }}>
+                                <Settings className="w-8 h-8 text-white" />
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-bold capitalize" style={{ color: COLORS.CITRON }}>Administration</h3>
+                                <p className="text-xs font-medium mt-1 opacity-60" style={{ color: COLORS.TIFFANY_BLUE }}>Manage system</p>
+                            </div>
+                            <div className="mt-auto pt-4 w-full flex justify-end">
+                                <div className="p-2 rounded-full bg-black/20 group-hover:bg-black/30 transition-colors">
+                                    <ArrowRight className="w-5 h-5 text-white/50 group-hover:text-white" />
+                                </div>
+                            </div>
+                        </button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- Admin Dashboard Component ---
+const AdminDashboard: React.FC<{ user: any; role: Role | null; }> = ({ user, role }) => {
+    const navigate = useNavigate();
+
+    // Only verify admin access
+    if (role !== 'admin' && role !== 'inventory_manager') {
+        return <Navigate to="/dashboard" />;
+    }
+
+    return (
+        <div className="h-full flex flex-col bg-slate-50">
+            <AdminTopBar activeTab="dashboard" />
+            <div className="p-6 md:p-8 h-full overflow-y-auto">
+                <div className="max-w-7xl mx-auto space-y-8">
+                    <h2 className="text-3xl font-bold tracking-tight text-slate-800">System Administration</h2>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        {PERMISSIONS[role!]?.filter(p => p.startsWith('admin_')).map(view => {
+                            const icons: any = { 'admin_users': Users, 'admin_tests': FlaskConical, 'admin_finance': DollarSign, 'admin_reports': FileBarChart, 'admin_logs': Shield, 'admin_settings': Settings };
+                            const Icon = icons[view] || Settings;
+                            const label = view.replace('admin_', '').replace(/_/g, ' ');
+
+                            return (
+                                <button
+                                    key={view}
+                                    onClick={() => navigate(`/${view}`)}
+                                    className="p-6 rounded-2xl flex flex-col items-start gap-4 transition-all hover:-translate-y-1 hover:shadow-2xl group border border-transparent text-left relative overflow-hidden"
+                                    style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}
+                                >
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10 blur-2xl transition-all group-hover:bg-white/10"></div>
+                                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg" style={{ backgroundColor: COLORS.PERSIAN_GREEN }}>
+                                        <Icon className="w-8 h-8 text-white" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-bold capitalize" style={{ color: COLORS.CITRON }}>{label}</h3>
+                                        <p className="text-xs font-medium mt-1 opacity-60" style={{ color: COLORS.TIFFANY_BLUE }}>Manage {label}</p>
+                                    </div>
+                                    <div className="mt-auto pt-4 w-full flex justify-end">
+                                        <div className="p-2 rounded-full bg-black/20 group-hover:bg-black/30 transition-colors">
+                                            <ArrowRight className="w-5 h-5 text-white/50 group-hover:text-white" />
+                                        </div>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+
+// --- Navigate Wrapper Component ---
+const NavigateWrapper: React.FC<{ Component: React.ElementType }> = ({ Component }) => {
+    const navigate = useNavigate();
+    const location = useLocation();
+
+    // Enhanced Back Function with Fallback
+    const handleBack = () => {
+        if (window.history.state && window.history.state.idx > 0) {
+            navigate(-1);
+        } else {
+            // Fallback to dashboard if no history
+            navigate('/dashboard');
+        }
+    };
+
+    return (
+        <ErrorBoundary>
+            <Component onBack={handleBack} />
+        </ErrorBoundary>
+    );
+};
+
 const App: React.FC = () => {
+    // Initial state must be null to prevent flashing/redirects before auth check
     const [user, setUser] = useState<any>(null);
     const [role, setRole] = useState<Role | null>(null);
-    const [currentView, setCurrentView] = useState<ViewState>('dashboard');
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true); // Start loading
     const [isInventoryModalOpen, setIsInventoryModalOpen] = useState(false);
 
     // Dialog State Management
@@ -4310,56 +6432,112 @@ const App: React.FC = () => {
     const dialogFunctions: DialogContextType = { showAlert, showConfirm, showPrompt, showToast };
 
     useEffect(() => {
-        const unsub = auth.onAuthStateChanged((u) => {
-            if (!u) {
-                setUser(null);
-                setRole(null);
-            } else {
-                setUser(u);
-                const savedRole = localStorage.getItem('labpro_role') as Role;
-                const savedView = localStorage.getItem('labpro_view') as ViewState;
-
-                if (savedRole && AVAILABLE_ROLES.some(r => r.id === savedRole)) {
-                    setRole(savedRole);
-                    // Restore last viewed panel
-                    if (savedView && PERMISSIONS[savedRole]?.includes(savedView)) {
-                        setCurrentView(savedView);
-                    }
-                } else {
-                    setRole(null);
+        // Prevent Backspace Navigation (except in inputs)
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Backspace') {
+                const target = e.target as HTMLElement;
+                const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+                if (!isInput) {
+                    e.preventDefault();
                 }
             }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
+    useEffect(() => {
+        // Synchronously restore UI session from LocalStorage if present.
+        // This prevents redirect-to-login on browser refresh by ensuring
+        // the app shows the same page immediately while Firebase auth
+        // reconciliation happens in the background.
+        const savedRole = localStorage.getItem('labpro_role') as Role;
+        const savedUser = localStorage.getItem('labpro_user');
+        if (savedRole && savedUser) {
+            try {
+                setUser(JSON.parse(savedUser));
+                setRole(savedRole);
+                // We can stop the initial loading spinner now because the UI
+                // session is restored from LocalStorage.
+                setLoading(false);
+                console.log('Session restored synchronously from LocalStorage');
+            } catch (e) {
+                console.error('Failed to parse saved user from LocalStorage', e);
+            }
+        }
+
+        // Listen for Firebase Auth changes and reconcile state.
+        // If Firebase has a user we prefer it; if not, we may attempt
+        // a silent anonymous sign-in so Firestore rules continue to work.
+        const unsub = auth.onAuthStateChanged(async (u) => {
+            if (!u) {
+                const savedRoleInner = localStorage.getItem('labpro_role') as Role;
+                const savedUserInner = localStorage.getItem('labpro_user');
+
+                if (savedRoleInner && savedUserInner) {
+                    console.log('onAuthStateChanged: restoring session from LocalStorage...');
+                    try {
+                        setUser(JSON.parse(savedUserInner));
+                        setRole(savedRoleInner);
+                        // Ensure firebase has an auth token for security rules
+                        // Use anonymous sign-in silently if needed.
+                        try {
+                            await auth.signInAnonymously();
+                        } catch (anonErr) {
+                            console.warn('Anonymous sign-in failed during restore:', anonErr);
+                        }
+                    } catch (e) {
+                        console.warn('Firebase Auth failed (using local credentials only):', e);
+                    }
+                } else {
+                    // Genuine logout
+                    setUser(null);
+                    setRole(null);
+                }
+            } else {
+                // Firebase has an authenticated user; prefer this source of truth
+                const savedRoleInner = localStorage.getItem('labpro_role') as Role;
+                const savedUserInner = localStorage.getItem('labpro_user');
+                if (savedRoleInner && savedUserInner) {
+                    try {
+                        setUser(JSON.parse(savedUserInner));
+                        setRole(savedRoleInner);
+                    } catch (e) {
+                        console.error('User Data Corrupt:', e);
+                        setUser({ uid: u.uid, email: u.email, id: u.uid });
+                    }
+                } else {
+                    console.warn('Restoring partial session from Firebase.');
+                    setUser({ uid: u.uid, email: u.email || 'User', id: u.uid });
+                    if (savedRoleInner) setRole(savedRoleInner);
+                }
+            }
+
+            // Only stop loading if it hasn't already been stopped by the
+            // synchronous LocalStorage restore above.
             setLoading(false);
         });
+
         return () => unsub();
     }, []);
 
     const handleLoginSuccess = (r: Role, u: any) => {
         setRole(r);
         setUser(u);
-        setCurrentView('dashboard');
         localStorage.setItem('labpro_role', r);
-        localStorage.setItem('labpro_view', 'dashboard');
+        localStorage.setItem('labpro_user', JSON.stringify(u));
     };
 
     const handleLogout = () => {
         auth.signOut();
         localStorage.removeItem('labpro_role');
-        localStorage.removeItem('labpro_view');
+        localStorage.removeItem('labpro_user');
         setUser(null);
         setRole(null);
-        setCurrentView('dashboard');
+        // Router will handle redirect via ProtectedRoute
     };
 
-    // Save current view to localStorage whenever it changes
-    useEffect(() => {
-        if (role && currentView) {
-            localStorage.setItem('labpro_view', currentView);
-        }
-    }, [currentView, role]);
-
     if (loading) return <div className="h-screen w-full flex items-center justify-center bg-slate-50"><Loader2 className="w-8 h-8 text-indigo-600 animate-spin" /></div>;
-    if (!user || !role) return <LandingPage onLoginSuccess={handleLoginSuccess} />;
 
     return (
         <DialogContext.Provider value={dialogFunctions}>
@@ -4392,102 +6570,37 @@ const App: React.FC = () => {
             />
             <ToastContainer toasts={toasts} onClose={closeToast} />
 
-            <div className="flex flex-col h-screen w-full font-sans overflow-hidden transition-colors duration-500" style={{ backgroundColor: COLORS.RICH_BLACK, color: COLORS.CITRON }}>
-                <InventoryRequestModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} userId={user.uid} userName={user.username || user.email || 'User'} userRole={role} />
+            <Router basename="/labman">
+                <Routes>
+                    <Route path="/login" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/dashboard" />} />
 
-                <TopBar activeTab={currentView} onNavigate={setCurrentView} user={user} onLogout={handleLogout} />
+                    <Route path="/" element={<ProtectedRoute user={user} role={role}><MainLayout user={user} role={role} onLogout={handleLogout} isInventoryModalOpen={isInventoryModalOpen} setIsInventoryModalOpen={setIsInventoryModalOpen} /></ProtectedRoute>}>
+                        <Route index element={<Navigate to="/dashboard" />} />
+                        <Route path="dashboard" element={<DashboardHome user={user} role={role} setIsInventoryModalOpen={setIsInventoryModalOpen} />} />
 
-                <main className="flex-1 h-full overflow-hidden relative flex flex-col">
-                    <div className="flex-1 overflow-auto p-0 relative custom-scrollbar">
-                        {currentView === 'dashboard' && (
-                            <div className="p-8 h-full overflow-y-auto">
-                                <div className="max-w-7xl mx-auto space-y-8">
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <h2 className="text-3xl font-bold tracking-tight" style={{ color: COLORS.TIFFANY_BLUE }}>Welcome back, <span style={{ color: COLORS.GAMBOGE }}>{user.username || 'User'}</span></h2>
-                                            <p className="opacity-60 mt-1">Select a workspace to begin.</p>
-                                        </div>
-                                        <div className="flex gap-4">
-                                            <button onClick={() => setIsInventoryModalOpen(true)} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all hover:scale-105 shadow-lg" style={{ backgroundColor: COLORS.MIDNIGHT_GREEN, color: COLORS.TIFFANY_BLUE }}>
-                                                <Truck className="w-5 h-5" /> Request Stock
-                                            </button>
-                                        </div>
-                                    </div>
+                        {/* Admin Dashboard */}
+                        <Route path="admin" element={<AdminDashboard user={user} role={role} />} />
 
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                                        {PERMISSIONS[role]?.map(view => {
-                                            if (view.startsWith('admin_')) return null;
-                                            const icons: any = { 'dashboard': LayoutDashboard, 'reception': ClipboardList, 'collection': Syringe, 'lab_tech': Microscope, 'lab_path': FileCheck, 'finance': DollarSign, 'inventory': Package };
-                                            const Icon = icons[view] || CheckCircle2;
-                                            const label = view.replace('_', ' ');
+                        <Route path="patients" element={<NavigateWrapper Component={PatientsModule} />} />
+                        <Route path="reception" element={<NavigateWrapper Component={ReceptionModule} />} />
+                        <Route path="collection" element={<NavigateWrapper Component={PhlebotomyModule} />} />
+                        <Route path="lab_tech" element={<NavigateWrapper Component={LabTechModule} />} />
+                        <Route path="lab_path" element={<NavigateWrapper Component={PathologistModule} />} />
+                        <Route path="inventory" element={<NavigateWrapper Component={(props: any) => <InventoryModule {...props} role={role} />} />} />
+                        <Route path="finance" element={<NavigateWrapper Component={FinanceModule} />} />
+                        {/* Admin Routes */}
+                        <Route path="admin_users" element={<NavigateWrapper Component={AdminUsers} />} />
+                        <Route path="admin_tests" element={<NavigateWrapper Component={TestManagementModule} />} />
+                        <Route path="admin_finance" element={<NavigateWrapper Component={AdminFinance} />} />
+                        <Route path="admin_reports" element={<NavigateWrapper Component={AdminReports} />} />
+                        <Route path="admin_logs" element={<NavigateWrapper Component={AdminLogs} />} />
+                        <Route path="admin_settings" element={<NavigateWrapper Component={AdminSettings} />} />
 
-                                            return (
-                                                <button
-                                                    key={view}
-                                                    onClick={() => setCurrentView(view)}
-                                                    className="p-6 rounded-2xl flex flex-col items-start gap-4 transition-all hover:-translate-y-1 hover:shadow-2xl group border border-transparent text-left relative overflow-hidden"
-                                                    style={{ backgroundColor: COLORS.MIDNIGHT_GREEN }}
-                                                >
-                                                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-10 -mt-10 blur-2xl transition-all group-hover:bg-white/10"></div>
-                                                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg" style={{ backgroundColor: COLORS.PERSIAN_GREEN }}>
-                                                        <Icon className="w-8 h-8 text-white" />
-                                                    </div>
-                                                    <div>
-                                                        <h3 className="text-xl font-bold capitalize" style={{ color: COLORS.CITRON }}>{label}</h3>
-                                                        <p className="text-xs font-medium mt-1 opacity-60" style={{ color: COLORS.TIFFANY_BLUE }}>Access module</p>
-                                                    </div>
-                                                    <div className="mt-auto pt-4 w-full flex justify-end">
-                                                        <div className="p-2 rounded-full bg-black/20 group-hover:bg-black/30 transition-colors">
-                                                            <ArrowRight className="w-5 h-5 text-white/50 group-hover:text-white" />
-                                                        </div>
-                                                    </div>
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-
-                                    {(role === 'admin' || role === 'inventory_manager') && (
-                                        <div className="pt-8 border-t border-[#0a9396]/20">
-                                            <h3 className="text-xl font-bold mb-6 flex items-center gap-2" style={{ color: COLORS.GAMBOGE }}><Settings className="w-6 h-6" /> Administration</h3>
-                                            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                                                {PERMISSIONS[role].filter(p => p.startsWith('admin_')).map(view => {
-                                                    const icons: any = { 'admin_users': Users, 'admin_tests': FlaskConical, 'admin_finance': DollarSign, 'admin_reports': FileBarChart, 'admin_logs': Shield, 'admin_settings': Settings };
-                                                    const Icon = icons[view] || Settings;
-                                                    return (
-                                                        <button
-                                                            key={view}
-                                                            onClick={() => setCurrentView(view)}
-                                                            className="p-4 rounded-xl flex items-center gap-3 transition-colors hover:bg-white/5 border border-transparent hover:border-[#0a9396]/30 text-left"
-                                                        >
-                                                            <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-[#0a9396]/10">
-                                                                <Icon className="w-5 h-5" style={{ color: COLORS.PERSIAN_GREEN }} />
-                                                            </div>
-                                                            <span className="font-bold text-sm" style={{ color: COLORS.TIFFANY_BLUE }}>{view.replace('admin_', '').replace(/_/g, ' ')}</span>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                        {currentView === 'patients' && <div className="p-6"><PatientsModule /></div>}
-                        {currentView === 'reception' && <ReceptionModule onBack={() => setCurrentView('dashboard')} />}
-                        {currentView === 'collection' && <PhlebotomyModule />}
-                        {currentView === 'lab_tech' && <LabTechModule />}
-                        {currentView === 'lab_path' && <PathologistModule />}
-                        {currentView === 'inventory' && <InventoryModule role={role} />}
-                        {currentView === 'finance' && <FinanceModule />}
-                        {currentView === 'admin_users' && <div className="p-6"><AdminUsers onBack={() => setCurrentView('dashboard')} /></div>}
-                        {currentView === 'admin_tests' && <div className="h-full"><TestManagementModule onBack={() => setCurrentView('dashboard')} /></div>}
-                        {currentView === 'admin_finance' && <div className="p-6"><AdminFinance onBack={() => setCurrentView('dashboard')} /></div>}
-                        {currentView === 'admin_reports' && <div className="p-6"><AdminReports onBack={() => setCurrentView('dashboard')} /></div>}
-                        {currentView === 'admin_logs' && <div className="p-6"><AdminLogs onBack={() => setCurrentView('dashboard')} /></div>}
-                        {currentView === 'admin_settings' && <div className="p-6"><AdminSettings onBack={() => setCurrentView('dashboard')} /></div>}
-                    </div>
-                </main>
-            </div>
+                        {/* Fallback */}
+                        <Route path="*" element={<Navigate to="/dashboard" />} />
+                    </Route>
+                </Routes>
+            </Router>
         </DialogContext.Provider>
     );
 };
