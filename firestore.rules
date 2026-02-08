@@ -1,0 +1,121 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ========================================
+    // QR CODE SYSTEM SECURITY RULES
+    // ========================================
+    
+    // QR Tokens - Public read for active, non-expired tokens
+    match /qr_tokens/{tokenId} {
+      // Anyone can read active tokens that haven't expired
+      allow read: if resource.data.isActive == true 
+        && (resource.data.expiresAt == null || resource.data.expiresAt > request.time);
+      
+      // Only authenticated users can create, update, or delete tokens
+      allow create, update, delete: if request.auth != null;
+    }
+    
+    // QR Access Logs - Authenticated for read, public for create (logging)
+    match /qr_access_logs/{logId} {
+      // Only authenticated users (admins) can read logs
+      allow read: if request.auth != null;
+      
+      // Anyone can create access logs (when scanning QR)
+      allow create: if true;
+    }
+    
+    // ========================================
+    // EXISTING COLLECTIONS (Keep your current rules)
+    // ========================================
+    
+    // Patients
+    match /patients/{patientId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Orders
+    match /orders/{orderId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Samples
+    match /samples/{sampleId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Tests
+    match /tests/{testId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Users
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Settings
+    match /settings/{settingId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Invoices
+    match /invoices/{invoiceId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Inventory Items
+    match /inventory_items/{itemId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Inventory Transactions
+    match /inventory_transactions/{transactionId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Inventory Requests
+    match /inventory_requests/{requestId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Inventory Batches
+    match /inventory_batches/{batchId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Vendors
+    match /vendors/{vendorId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Expenses
+    match /expenses/{expenseId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Doctors
+    match /doctors/{doctorId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Audit Logs
+    match /audit_logs/{logId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+    }
+    
+    // Notifications
+    match /notifications/{notificationId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Default deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

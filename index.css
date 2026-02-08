@@ -1,0 +1,44 @@
+/* Global styles */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 
+  FIX: Input Visibility on Light Backgrounds
+  Forces black caret and black mouse pointer (via color-scheme)
+*/
+.force-light-input {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  caret-color: #000000 !important;
+  color-scheme: light !important;
+
+  /* CURSOR FIXES - COMPREHENSIVE */
+  cursor: text !important;
+  position: relative !important;
+  /* Ensure it's above non-interactive overlays */
+  z-index: 1 !important;
+  /* Lift above potential shadows or absolute elements */
+  mix-blend-mode: normal !important;
+  /* Prevent blend modes from hiding cursor */
+
+  border: 1px solid #e2e8f0 !important;
+}
+
+/* Ensure placeholder is visible but distinct */
+.force-light-input::placeholder {
+  color: #94a3b8 !important;
+  /* slate-400 */
+}
+
+/* 
+  Global rule for all inputs to ensure they respect the caret color 
+  if they are light. But we scope it to avoid breaking dark inputs.
+*/
+input[type="text"],
+input[type="number"],
+input[type="tel"],
+textarea,
+select {
+  /* Default safe fallback */
+}
