@@ -255,7 +255,7 @@ export async function getOrderDataByToken(token: string): Promise<OrderStatusDat
         // 2. Fetch Order Data (even if we found it in validate, we need full clean fetch)
         const orderDoc = await db.collection('orders').doc(tokenData.orderId).get();
         if (!orderDoc.exists) return null;
-        const orderData = { id: orderDoc.id, ...orderDoc.data() };
+        const orderData = { id: orderDoc.id, ...orderDoc.data() } as any;
 
         // 3. Fetch Patient
         // Ensure patientId is valid

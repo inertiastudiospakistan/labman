@@ -3179,8 +3179,7 @@ const InventoryModule: React.FC<{ role: Role | null; onBack?: () => void }> = ({
                         { name: 'Imported JSON', phone: '' },
                         0, // tax
                         'immediate',
-                        auth.currentUser?.email || 'system',
-                        { status: 'paid_awaiting_delivery' }
+                        auth.currentUser?.email || 'system'
                     );
                     showToast('success', `Imported ${added} item(s) and created a Purchase Order awaiting receipt.`);
                 } catch (poErr) {

@@ -699,6 +699,7 @@ export const deductInventoryAndMarkSamples = async (
                 totalDeducted: number;
                 totalCost: number;
                 updatedActivePOs: string[];
+                syntheticBatch?: { ref: any; data: any };
             }> = {} as any;
 
             const allPOIds = new Set<string>();
