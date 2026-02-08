@@ -1,0 +1,1 @@
+@tailwind base;@tailwind components;@tailwind utilities;.force-light-input{background-color:#fff!important;color:#000!important;caret-color:#000!important;color-scheme:light!important;cursor:text!important;position:relative!important;z-index:1!important;mix-blend-mode:normal!important;border:1px solid #e2e8f0!important}.force-light-input::placeholder{color:#94a3b8!important}
